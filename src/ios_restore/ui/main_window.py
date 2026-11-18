@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, QTimer, Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QSettings, QThreadPool, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -26,208 +27,295 @@ from ios_restore.infrastructure.device_cli_adapter import DeviceCliAdapter
 from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAdapter
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
-from ios_restore.ui.theme import STYLESHEET
+from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
 from ios_restore.ui.workers import (
     DetectDevicesWorker,
     InstallAppWorker,
     PairDeviceWorker,
 )
 
-ROW_H = 34
 
-
-def _panel() -> QFrame:
-    frame = QFrame()
-    frame.setObjectName("panel")
-    frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-    return frame
-
-
-def _section(text: str) -> QLabel:
-    label = QLabel(text.upper())
-    label.setObjectName("sectionLabel")
-    return label
-
-
-def _btn(text: str, *, object_name: str | None = None) -> QPushButton:
+def make_button(text: str, variant: str | None = None) -> QPushButton:
     button = QPushButton(text)
-    if object_name:
-        button.setObjectName(object_name)
-    button.setFixedHeight(ROW_H)
     button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    if variant:
+        button.setProperty("variant", variant)
     return button
 
 
-def _equal_buttons(*buttons: QPushButton) -> QHBoxLayout:
-    row = QHBoxLayout()
-    row.setSpacing(8)
-    row.setContentsMargins(0, 0, 0, 0)
-    for button in buttons:
-        row.addWidget(button, 1)
-    return row
+class Card(QFrame):
+    """Карточка с заголовком, статусом справа и необязательным номером шага."""
+
+    def __init__(
+        self,
+        title: str,
+        step: int | None = None,
+        hint: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.setObjectName("card")
+        self._step = step
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 20)
+        outer.setSpacing(14)
+
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        self.badge: QLabel | None = None
+        if step is not None:
+            self.badge = QLabel(str(step))
+            self.badge.setObjectName("stepBadge")
+            self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.badge.setProperty("state", "idle")
+            head.addWidget(self.badge)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("cardTitle")
+        head.addWidget(title_lbl)
+        head.addStretch(1)
+        self.status = QLabel("")
+        self.status.setObjectName("cardStatus")
+        head.addWidget(self.status)
+        outer.addLayout(head)
+
+        if hint:
+            hint_lbl = QLabel(hint)
+            hint_lbl.setObjectName("hint")
+            hint_lbl.setWordWrap(True)
+            outer.addWidget(hint_lbl)
+
+        self.body = QVBoxLayout()
+        self.body.setSpacing(10)
+        outer.addLayout(self.body)
+
+    def set_state(self, state: str, status_text: str = "") -> None:
+        """state: idle | active | done"""
+        self.status.setText(status_text)
+        if self.badge is not None:
+            self.badge.setProperty("state", state)
+            self.badge.setText("✓" if state == "done" else str(self._step))
+            repolish(self.badge)
+
+
+class Chip(QLabel):
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setObjectName("chip")
+        self.setProperty("state", "idle")
+
+    def set_state(self, ok: bool, text: str) -> None:
+        self.setText(text)
+        self.setProperty("state", "ok" if ok else "idle")
+        repolish(self)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, packages_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        packages_dir: Path | None = None,
+        *,
+        mode: str = "dark",
+    ) -> None:
         super().__init__()
         self.setWindowTitle("iCarcas")
-        self.resize(820, 720)
-        self.setMinimumSize(700, 600)
-        self.setStyleSheet(STYLESHEET)
-        self._layout_fitted = False
+        self.resize(640, 720)
+        self.setMinimumSize(520, 480)
 
         self._thread_pool = QThreadPool.globalInstance()
         self._packages_dir = packages_dir or (Path.cwd() / "packages")
         self._busy = False
         self._devices: list[DeviceInfo] = []
         self._package: PackageInfo | None = None
+        self._mode = mode if mode in PALETTES else "dark"
         tools = default_tools_dir()
         self._device_adapter = DeviceCliAdapter(tools_dir=tools)
         self._appstore = AppStoreCliAdapter(tools_dir=tools)
         self._installer = InstallCliAdapter(tools_dir=tools)
 
-        central = QWidget(self)
-        central.setObjectName("centralRoot")
-        self.setCentralWidget(central)
+        shell = QWidget()
+        shell.setObjectName("root")
+        self.setCentralWidget(shell)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("mainScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        shell_layout.addWidget(scroll)
+
+        central = QWidget()
+        central.setObjectName("root")
+        central.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        scroll.setWidget(central)
 
         root = QVBoxLayout(central)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(10)
+        root.setContentsMargins(28, 26, 28, 26)
+        root.setSpacing(16)
 
-        root.addLayout(self._build_header())
-        root.addWidget(self._build_device_panel())
-        root.addWidget(self._build_account_panel())
-        root.addWidget(self._build_app_panel())
-        root.addWidget(self._build_log_panel(), 1)
+        header = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        self.title_label = QLabel()
+        self.title_label.setObjectName("appTitle")
+        self.title_label.setTextFormat(Qt.TextFormat.RichText)
+        self._refresh_title()
+        sub = QLabel("Восстановление своих приложений на iPhone")
+        sub.setObjectName("appSubtitle")
+        titles.addWidget(self.title_label)
+        titles.addWidget(sub)
+        header.addLayout(titles)
+        header.addStretch(1)
 
-        self._append_env_status()
-        QTimer.singleShot(0, self._fit_window_to_content)
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(0)
+        theme_row.addStretch(1)
+        self.theme_button = make_button("", "ghost")
+        self.theme_button.setToolTip("Переключить светлую / тёмную тему")
+        self.theme_button.clicked.connect(self._toggle_theme)
+        self._refresh_theme_button()
+        theme_row.addWidget(self.theme_button)
+        right.addLayout(theme_row)
+        self.chip_device = Chip("iPhone не найден")
+        self.chip_session = Chip("Нет сессии App Store")
+        right.addWidget(self.chip_device, 0, Qt.AlignmentFlag.AlignRight)
+        right.addWidget(self.chip_session, 0, Qt.AlignmentFlag.AlignRight)
+        header.addLayout(right)
+        root.addLayout(header)
 
-    def _fit_window_to_content(self) -> None:
-        if self._layout_fitted:
-            return
-        self._layout_fitted = True
-        # Ensure content panels keep full height (no crush/overlap).
-        for panel in self.findChildren(QFrame):
-            if panel.objectName() != "panel":
-                continue
-            if panel is self.output.parent():
-                continue
-            panel.setMinimumHeight(panel.sizeHint().height())
-        needed = self.sizeHint().height()
-        self.setMinimumHeight(max(self.minimumHeight(), needed))
-        if self.height() < needed:
-            self.resize(self.width(), needed)
-
-    def _build_header(self) -> QVBoxLayout:
-        col = QVBoxLayout()
-        col.setSpacing(4)
-        col.setContentsMargins(2, 0, 2, 6)
-
-        title = QLabel()
-        title.setObjectName("brandTitle")
-        title.setTextFormat(Qt.TextFormat.RichText)
-        title.setText(
-            '<span style="color:#1A73E8;">i</span>'
-            '<span style="color:#121417;">Carcas</span>'
-        )
-        title.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        col.addWidget(title)
-
-        tag = QLabel("Восстановление своих приложений на iPhone")
-        tag.setObjectName("brandTagline")
-        col.addWidget(tag)
-        return col
-
-    def _build_device_panel(self) -> QFrame:
-        panel = _panel()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-        layout.addWidget(_section("Устройство"))
-
-        self.detect_button = _btn("Найти устройство")
+        self.card_device = Card("Устройство", step=1)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.detect_button = make_button("Найти устройство")
         self.detect_button.clicked.connect(self._on_detect)
-        self.pair_button = _btn("Установить доверие")
+        self.pair_button = make_button("Установить доверие")
         self.pair_button.clicked.connect(self._on_pair)
-        layout.addLayout(_equal_buttons(self.detect_button, self.pair_button))
-        return panel
+        row.addWidget(self.detect_button, 1)
+        row.addWidget(self.pair_button, 1)
+        self.card_device.body.addLayout(row)
+        self.card_device.set_state("active")
+        root.addWidget(self.card_device)
 
-    def _build_account_panel(self) -> QFrame:
-        panel = _panel()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-        layout.addWidget(_section("App Store"))
-
-        hint = QLabel(
-            "Вход и загрузка открывают консоль ipatool — "
-            "пароль, 2FA и Keychain passphrase только там."
+        self.card_store = Card(
+            "App Store",
+            step=2,
+            hint=(
+                "Пароль, 2FA и Keychain passphrase вводятся в консоли ipatool — "
+                "она откроется сама."
+            ),
         )
-        hint.setObjectName("brandTagline")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        self.login_button = _btn("Войти…")
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.login_button = make_button("Войти…")
         self.login_button.clicked.connect(self._on_login)
-        self.auth_info_button = _btn("Проверить сессию…")
+        self.auth_info_button = make_button("Проверить сессию…")
         self.auth_info_button.clicked.connect(self._on_auth_info)
-        self.logout_button = _btn("Выйти…", object_name="dangerButton")
+        self.logout_button = make_button("Выйти…", "danger")
         self.logout_button.clicked.connect(self._on_logout)
-        layout.addLayout(
-            _equal_buttons(self.login_button, self.auth_info_button, self.logout_button)
-        )
-        return panel
+        row.addWidget(self.login_button, 1)
+        row.addWidget(self.auth_info_button, 1)
+        row.addWidget(self.logout_button, 1)
+        self.card_store.body.addLayout(row)
+        root.addWidget(self.card_store)
 
-    def _build_app_panel(self) -> QFrame:
-        panel = _panel()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-        layout.addWidget(_section("Приложение"))
-
+        self.card_app = Card("Приложение", step=3)
         self.app_input = QLineEdit()
-        self.app_input.setObjectName("appInput")
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
         )
-        placeholder_palette = self.app_input.palette()
-        placeholder_palette.setColor(
-            QPalette.ColorRole.PlaceholderText, QColor("#5C6670")
-        )
-        placeholder_palette.setColor(QPalette.ColorRole.Text, QColor("#121417"))
-        self.app_input.setPalette(placeholder_palette)
-        self.app_input.setFixedHeight(ROW_H)
-        layout.addWidget(self.app_input)
-
-        self.download_button = _btn("Скачать IPA…")
+        self.app_input.setClearButtonEnabled(True)
+        self.card_app.body.addWidget(self.app_input)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.download_button = make_button("Скачать IPA…")
         self.download_button.clicked.connect(self._on_download)
-        self.pickup_button = _btn("Подхватить IPA")
+        self.pickup_button = make_button("Подхватить IPA")
         self.pickup_button.clicked.connect(self._on_pickup_ipa)
-        layout.addLayout(_equal_buttons(self.download_button, self.pickup_button))
-
-        self.install_button = _btn("Установить на iPhone", object_name="primaryButton")
-        self.install_button.clicked.connect(self._on_install)
+        row.addWidget(self.download_button, 1)
+        row.addWidget(self.pickup_button, 1)
+        self.card_app.body.addLayout(row)
+        self.install_button = make_button("Установить на iPhone", "primary")
         self.install_button.setEnabled(False)
-        layout.addWidget(self.install_button)
-        return panel
+        self.install_button.clicked.connect(self._on_install)
+        self.card_app.body.addWidget(self.install_button)
+        root.addWidget(self.card_app)
 
-    def _build_log_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
-        layout.addWidget(_section("Журнал"))
-
-        self.output = QTextEdit()
-        self.output.setObjectName("logView")
+        log_card = Card("Журнал")
+        self.btn_clear_log = make_button("Очистить", "ghost")
+        head_layout = log_card.layout().itemAt(0).layout()
+        assert isinstance(head_layout, QHBoxLayout)
+        head_layout.insertWidget(2, self.btn_clear_log)
+        self.output = QPlainTextEdit()
+        self.output.setObjectName("log")
         self.output.setReadOnly(True)
-        self.output.setMinimumHeight(120)
-        layout.addWidget(self.output, 1)
-        return panel
+        self.output.setMinimumHeight(140)
+        log_card.body.addWidget(self.output)
+        self.btn_clear_log.clicked.connect(self.output.clear)
+        root.addWidget(log_card, 1)
+
+        self._append_env_status()
+        session_ok = self._appstore.session_files_present()
+        self.set_session_chip(session_ok)
+
+    def _refresh_title(self) -> None:
+        accent = PALETTES[self._mode]["accent"]
+        self.title_label.setText(f'<span style="color:{accent}">i</span>Carcas')
+
+    def _refresh_theme_button(self) -> None:
+        if self._mode == "dark":
+            self.theme_button.setText("Светлая тема")
+        else:
+            self.theme_button.setText("Тёмная тема")
+
+    def _toggle_theme(self) -> None:
+        self.apply_theme("light" if self._mode == "dark" else "dark")
+
+    def apply_theme(self, mode: str) -> None:
+        if mode not in PALETTES:
+            mode = "dark"
+        self._mode = mode
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_stylesheet(mode))
+        self._refresh_title()
+        self._refresh_theme_button()
+        # Dynamic properties (chips / badges) need a polish pass after QSS swap.
+        for widget in self.findChildren(QWidget):
+            if widget.property("state") is not None or widget.property("variant") is not None:
+                repolish(widget)
+        QSettings("iCarcas", "iCarcas").setValue("theme", mode)
+
+    def log(self, text: str) -> None:
+        self.output.appendPlainText(text)
+
+    def set_device_chip(self, found: bool, name: str = "") -> None:
+        self.chip_device.set_state(
+            found,
+            name or ("iPhone подключён" if found else "iPhone не найден"),
+        )
+        self.card_device.set_state(
+            "done" if found else "active",
+            "Готово" if found else "",
+        )
+        if found:
+            self.card_store.set_state("active")
+
+    def set_session_chip(self, ok: bool) -> None:
+        self.chip_session.set_state(
+            ok,
+            "Сессия App Store активна" if ok else "Нет сессии App Store",
+        )
+        self.card_store.set_state(
+            "done" if ok else "active",
+            "Готово" if ok else "",
+        )
+        if ok:
+            self.card_app.set_state("active")
 
     def _append_env_status(self) -> None:
         try:
@@ -307,6 +395,7 @@ class MainWindow(QMainWindow):
             "Если увидите email/name и success — сессия активна.",
         )
         present = self._appstore.session_files_present()
+        self.set_session_chip(present)
         self.output.setPlainText(
             "Открыта консоль auth info.\n"
             f"Локальные файлы сессии: {'да' if present else 'нет'}.\n"
@@ -326,6 +415,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.output.setPlainText(str(exc))
             return
+        self.set_session_chip(False)
         self.output.setPlainText(
             "Открыта консоль auth revoke. "
             "Завершите её и при необходимости введите passphrase."
@@ -355,6 +445,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Загрузка", str(exc))
             return
         self._download_before_names = before
+        self.card_app.set_state("active", "Загрузка…")
         self.output.setPlainText(
             "Консоль download открыта.\n"
             "1) Введите Keychain passphrase в консоли\n"
@@ -416,21 +507,26 @@ class MainWindow(QMainWindow):
         assert isinstance(devices, list)
         self._devices = devices
         if not devices:
+            self.set_device_chip(False)
             self.output.setPlainText("Устройства не найдены.")
         else:
             lines = [f"Найдено устройств: {len(devices)}"]
-            for d in devices:
-                avail = "доступно" if d.available_for_operations else "нужно доверие"
-                lines.append(
-                    f"- {d.display_name} | UDID={d.device_id} | "
-                    f"iOS={d.os_version or '?'} | {avail}"
+            for device in devices:
+                avail = (
+                    "доступно" if device.available_for_operations else "нужно доверие"
                 )
+                lines.append(
+                    f"- {device.display_name} | UDID={device.device_id} | "
+                    f"iOS={device.os_version or '?'} | {avail}"
+                )
+            self.set_device_chip(True, devices[0].display_name)
             self.output.setPlainText("\n".join(lines))
         self._set_busy(False)
 
     def _on_paired(self, device: object) -> None:
         assert isinstance(device, DeviceInfo)
         self._devices = [device]
+        self.set_device_chip(True, device.display_name)
         self.output.setPlainText(
             "Доверие OK.\n"
             f"{device.display_name} | {device.device_id} | iOS {device.os_version or '?'}"
@@ -440,7 +536,7 @@ class MainWindow(QMainWindow):
     def _on_download_done(self, package: PackageInfo) -> None:
         self._package = package
         self.install_button.setEnabled(True)
-        self.install_button.setText("Установить на iPhone")
+        self.card_app.set_state("done", "IPA готов")
         self.output.setPlainText(
             "IPA подхвачен.\n"
             f"Путь: {package.local_path}\n"
@@ -480,7 +576,6 @@ class MainWindow(QMainWindow):
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)
-                btn.setText("Установить на iPhone")
             else:
                 btn.setEnabled(not busy)
         if status:

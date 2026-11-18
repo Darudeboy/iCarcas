@@ -17,14 +17,26 @@ def main(argv: list[str] | None = None) -> int:
     if "--demo-cli" in argv:
         return _run_cli_demo()
 
+    from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
     from ios_restore.ui.main_window import MainWindow
+    from ios_restore.ui.theme import PALETTES, build_stylesheet
+
+    settings = QSettings("iCarcas", "iCarcas")
+    if "--light" in argv:
+        mode = "light"
+    elif "--dark" in argv:
+        mode = "dark"
+    else:
+        saved = str(settings.value("theme", "dark"))
+        mode = saved if saved in PALETTES else "dark"
 
     app = QApplication(sys.argv)
     app.setApplicationName("iCarcas")
     app.setOrganizationName("iCarcas")
-    window = MainWindow(packages_dir=Path.cwd() / "packages")
+    app.setStyleSheet(build_stylesheet(mode))
+    window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
     window.show()
     return app.exec()
 
