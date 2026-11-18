@@ -1,0 +1,52 @@
+# iOS App Restore
+
+Локальная настольная утилита для Windows: загрузка оригинальных App Store-пакетов, доступных вашему Apple ID, и установка на ваш iPhone.
+
+**Этап:** 0–1 (исследование + mock-каркас). Реальные вход в Apple ID, загрузка и USB-устройство пока не подключены.
+
+## Требования
+
+- Windows 10/11 x64
+- Python 3.12–3.13 с [python.org](https://www.python.org/downloads/) (не Microsoft Store)
+- Позже (не на этапе 1): `ipatool`, инструменты libimobiledevice / `ideviceinstaller`, драйверы Apple Mobile Device Support
+
+## Быстрый старт (mock)
+
+```powershell
+cd D:\appstore
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e ".[dev]"
+pytest
+python -m ios_restore --demo-cli
+python -m ios_restore
+```
+
+`--demo-cli` прогоняет mock-сценарий без окна. Без флага открывается минимальный GUI.
+
+## Что уже есть
+
+- Доменные модели, FSM, коды ошибок
+- Порты и mock-адаптеры (без сети и без iPhone)
+- `ProcessRunner` с redaction секретов
+- Безопасный осмотр IPA (Zip Slip / лимиты)
+- Unit-тесты и демо-UI на PySide6
+
+## Ограничения (честно)
+
+См. [docs/capability_matrix.md](docs/capability_matrix.md).
+
+- Успешная «установка» в демо — ответ mock-инструмента, не проверка запуска приложения.
+- Установка FairPlay IPA на не-jailbroken iPhone через `ideviceinstaller` — **assumed**, не `verified_locally`.
+- Обход DRM, re-sign и jailbreak не реализуются.
+
+## Документация
+
+- [docs/architecture.md](docs/architecture.md)
+- [docs/capability_matrix.md](docs/capability_matrix.md)
+- [docs/dependency_licenses.md](docs/dependency_licenses.md)
+
+## Удаление локальных данных демо
+
+Удалите каталог `packages/` в рабочей директории и при необходимости `.venv/`.

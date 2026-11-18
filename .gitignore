@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.python-version
+
+# Tests / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# IDE
+.idea/
+.gigaide/
+.vscode/
+*.swp
+1.md
+2.md
+
+# App runtime
+*.ipa
+logs/
+packages/
+diagnostics/
+.ipatool/
+
+# Downloaded native tools (re-fetch via README)
+tools/libimobiledevice/
+tools/*.tar.gz
+tools/*.tar.xz
+tools/*.zip
+tools/*.exe
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
