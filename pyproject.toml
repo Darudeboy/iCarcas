@@ -26,6 +26,9 @@ ios-restore = "ios_restore.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"ios_restore.ui" = ["resources/*.png", "resources/*.ico"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

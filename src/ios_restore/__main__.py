@@ -39,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyle("Fusion")
     # Светлая палитра приложения — чтобы модальные диалоги были читаемыми
     from PySide6.QtGui import QColor, QPalette
+
+    from ios_restore.ui.brand_icon import BrandSplash, load_app_icon
+
+    app_icon = load_app_icon()
+    app.setWindowIcon(app_icon)
+
     _pal = QPalette()
     _pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
     _pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
@@ -50,8 +56,26 @@ def main(argv: list[str] | None = None) -> int:
     _pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     app.setPalette(_pal)
     app.setStyleSheet(build_stylesheet(mode))
+
     window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
-    window.show()
+    window.setWindowIcon(app_icon)
+
+    skip_splash = "--no-splash" in argv
+
+    def _show_main() -> None:
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    if skip_splash:
+        _show_main()
+    else:
+        splash = BrandSplash(mode=mode, on_finished=_show_main)
+        splash.setWindowIcon(app_icon)
+        splash.show()
+        # Keep splash referenced for the event loop.
+        app._icarcas_splash = splash  # type: ignore[attr-defined]
+
     return app.exec()
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -213,6 +214,61 @@ class AppStoreCliAdapter:
     def download_result_path(self, destination_dir: str | Path) -> Path:
         return Path(destination_dir) / "download-result.json"
 
+    def download_progress_path(self, destination_dir: str | Path) -> Path:
+        return Path(destination_dir) / "download-progress.json"
+
+    def read_download_progress(self, destination_dir: str | Path) -> dict | None:
+        path = self.download_progress_path(destination_dir)
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def clear_download_progress(self, destination_dir: str | Path) -> None:
+        path = self.download_progress_path(destination_dir)
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def measure_partial_download_bytes(
+        self,
+        destination_dir: str | Path,
+        *,
+        store_id: str | None = None,
+    ) -> int:
+        """Bytes of in-progress .ipa.tmp / parts (UI progress fallback)."""
+        dest = Path(destination_dir)
+        if not dest.is_dir():
+            return 0
+        sid = (store_id or "").strip()
+        total = 0
+
+        def _match_sid(name: str) -> bool:
+            return (not sid) or name.startswith(sid)
+
+        try:
+            for path in dest.iterdir():
+                name = path.name
+                if path.is_file() and (
+                    name.endswith(".ipa.tmp") or ".ipa.tmp." in name
+                ):
+                    if _match_sid(name):
+                        total += path.stat().st_size
+                elif path.is_dir() and "ipatool-parts" in name:
+                    if not _match_sid(name):
+                        continue
+                    for part in path.rglob("*"):
+                        if part.is_file():
+                            total += part.stat().st_size
+        except OSError:
+            return total
+        return total
+
     def begin_headless_download(
         self,
         app: AppReference,
@@ -235,6 +291,7 @@ class AppStoreCliAdapter:
         result_path = self.download_result_path(dest)
         if result_path.is_file():
             result_path.unlink()
+        self.clear_download_progress(dest)
         ps_args = [
             "powershell",
             "-NoProfile",
@@ -268,12 +325,17 @@ class AppStoreCliAdapter:
             app.store_id or app.bundle_id,
             max_attempts,
         )
+        # Без видимой консоли: раньше окно мелькало с красным выводом и сразу закрывалось.
+        # Прогресс — через download-result.json и журнал UI.
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         try:
             self._active_proc = subprocess.Popen(  # noqa: S603
                 ps_args,
                 cwd=str(script.parent),
                 env=env,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,  # type: ignore[attr-defined]
+                creationflags=creationflags,
             )
         except OSError as exc:
             raise RestoreError(
@@ -289,7 +351,17 @@ class AppStoreCliAdapter:
             self._active_proc = None
             return False
         try:
-            proc.terminate()
+            if sys.platform == "win32":
+                # Убить дерево (powershell + ipatool), иначе ipatool продолжает качать.
+                subprocess.run(  # noqa: S603
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                )
+            else:
+                proc.terminate()
         except OSError:
             return False
         self._active_proc = None
@@ -312,7 +384,26 @@ class AppStoreCliAdapter:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError:
             return None
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        # Older download-one.ps1 mis-parsed ANSI-colored success=true as failure.
+        if not data.get("success"):
+            err = str(data.get("error") or "")
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", err)
+            if re.search(r"success[=:]?\s*true", plain, re.I) and not re.search(
+                r"success[=:]?\s*false", plain, re.I
+            ):
+                ipa_match = re.search(
+                    r'output[=:]\s*"?([A-Za-z]:[^"\r\n]+\.ipa)', plain, re.I
+                )
+                fixed = {
+                    **data,
+                    "success": True,
+                    "error": "",
+                    "ipaPath": (ipa_match.group(1) if ipa_match else data.get("ipaPath") or ""),
+                }
+                return fixed
+        return data
 
     def begin_script_with_passphrase(
         self,
@@ -674,34 +765,133 @@ class AppStoreCliAdapter:
         *,
         before_names: set[str],
         timeout_sec: float = 2.0,
+        preferred_store_id: str | None = None,
     ) -> PackageInfo | None:
         """Pick up an IPA that appeared after an interactive download console."""
-        dest = Path(destination_dir)
-        deadline = time.time() + timeout_sec
-        latest: Path | None = None
-        while time.time() < deadline:
-            candidates = [
-                p
-                for p in dest.glob("*.ipa")
-                if p.name not in before_names and p.is_file()
-            ]
-            if candidates:
-                latest = max(candidates, key=lambda p: p.stat().st_mtime)
-                break
-            time.sleep(0.2)
-        if latest is None:
-            # Fallback: newest ipa in folder (user may overwrite same name)
-            all_ipas = list(dest.glob("*.ipa"))
-            if not all_ipas:
-                return None
-            latest = max(all_ipas, key=lambda p: p.stat().st_mtime)
-        return self.inspect_package(latest)
+        path = self.find_ipa_path(
+            destination_dir,
+            before_names=before_names,
+            timeout_sec=timeout_sec,
+            preferred_store_id=preferred_store_id,
+        )
+        if path is None:
+            return None
+        return self.inspect_package(path)
 
-    def list_ipa_names(self, destination_dir: str | Path) -> set[str]:
+    def find_ipa_path(
+        self,
+        destination_dir: str | Path,
+        *,
+        before_names: set[str] | None = None,
+        before_mtimes: dict[str, float] | None = None,
+        timeout_sec: float = 0.0,
+        preferred_store_id: str | None = None,
+        require_fresh: bool = False,
+        allow_existing_fallback: bool = True,
+    ) -> Path | None:
+        """Resolve which .ipa to use: fresh/new → Store ID match → newest.
+
+        require_fresh: only files created/overwritten after the snapshot.
+        allow_existing_fallback: if False and nothing fresh — return None
+        (do not silently pick an old IPA after a failed download).
+        """
         dest = Path(destination_dir)
         if not dest.is_dir():
-            return set()
-        return {p.name for p in dest.glob("*.ipa")}
+            return None
+        before = before_names or set()
+        mtimes = before_mtimes or {}
+        deadline = time.time() + max(0.0, timeout_sec)
+        latest: Path | None = None
+        while True:
+            all_ipas = [
+                p for p in dest.glob("*.ipa") if p.is_file() and p.stat().st_size > 1024
+            ]
+            fresh = [
+                p
+                for p in all_ipas
+                if self._is_fresh_ipa(p, before_names=before, before_mtimes=mtimes)
+            ]
+            if require_fresh or not allow_existing_fallback:
+                pool = fresh
+            else:
+                pool = fresh or all_ipas
+            if pool:
+                sid = (preferred_store_id or "").strip()
+                if sid.isdigit():
+                    matched = [
+                        p
+                        for p in pool
+                        if p.name.startswith(f"{sid}_") or p.stem == sid
+                    ]
+                    if matched:
+                        latest = max(matched, key=lambda p: p.stat().st_mtime)
+                        break
+                latest = max(pool, key=lambda p: p.stat().st_mtime)
+                break
+            if time.time() >= deadline:
+                break
+            time.sleep(0.2)
+        return latest
+
+    @staticmethod
+    def _is_fresh_ipa(
+        path: Path,
+        *,
+        before_names: set[str],
+        before_mtimes: dict[str, float],
+    ) -> bool:
+        """True if file is new or its mtime/size changed since snapshot."""
+        name = path.name
+        try:
+            st = path.stat()
+        except OSError:
+            return False
+        if name not in before_names:
+            return True
+        prev_mtime = before_mtimes.get(name)
+        if prev_mtime is None:
+            return True
+        # Overwrite / touch after download started.
+        return st.st_mtime > (prev_mtime + 0.5)
+
+    def list_ipa_entries(self, destination_dir: str | Path) -> list[tuple[Path, int, float]]:
+        """Return (path, size, mtime) for real IPA files, newest first."""
+        dest = Path(destination_dir)
+        if not dest.is_dir():
+            return []
+        entries: list[tuple[Path, int, float]] = []
+        for p in dest.glob("*.ipa"):
+            if not p.is_file():
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_size <= 1024:
+                continue
+            entries.append((p, st.st_size, st.st_mtime))
+        entries.sort(key=lambda item: item[2], reverse=True)
+        return entries
+
+    def list_ipa_names(self, destination_dir: str | Path) -> set[str]:
+        return set(self.list_ipa_mtimes(destination_dir).keys())
+
+    def list_ipa_mtimes(self, destination_dir: str | Path) -> dict[str, float]:
+        dest = Path(destination_dir)
+        if not dest.is_dir():
+            return {}
+        out: dict[str, float] = {}
+        for p in dest.glob("*.ipa"):
+            if not p.is_file():
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_size <= 1024:
+                continue
+            out[p.name] = st.st_mtime
+        return out
 
     def inspect_package(self, path: Path) -> PackageInfo:
         try:

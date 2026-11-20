@@ -8,7 +8,10 @@
 # или:
 python -m ios_restore              # тёмная тема (или сохранённая)
 python -m ios_restore --light
+python -m ios_restore --no-splash  # без анимации слоёв
 ```
+
+Иконка: `assets/icarcas-icon.png` (окно/taskbar), `assets/favicon.ico` / `favicon.png`. При старте — splash «Загрузка…» с анимацией слоёв.
 
 Личный portable: `.\scripts\check-tools.ps1` проверяет `tools\libimobiledevice\*.exe`.  
 Откат к бэкапу перед prod-срезом: `git checkout backup/pre-prod-2026-11-20`.

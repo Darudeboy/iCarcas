@@ -122,6 +122,55 @@ QLineEdit {
 QLineEdit:hover { border-color: $border_strong; }
 QLineEdit:focus { border: 1px solid $accent; }
 
+/* ---------- Статус загрузки IPA ---------- */
+QFrame#downloadStatusPanel {
+    background: $surface2;
+    border: 1px solid $border;
+    border-radius: 12px;
+    padding: 4px;
+}
+QFrame#downloadStatusPanel[phase="running"] {
+    border-color: $accent;
+    background: $accent_dim;
+}
+QFrame#downloadStatusPanel[phase="ok"] {
+    border-color: $ok_border;
+    background: $ok_bg;
+}
+QFrame#downloadStatusPanel[phase="error"] {
+    border-color: $danger_border;
+    background: $danger_bg;
+}
+QFrame#downloadStatusPanel[phase="idle"] {
+    border-color: $border;
+}
+QLabel#downloadStateTitle {
+    font-size: 14px;
+    font-weight: 700;
+    color: $text;
+}
+QLabel#downloadStateTitle[phase="running"] { color: $accent; }
+QLabel#downloadStateTitle[phase="ok"] { color: $ok; }
+QLabel#downloadStateTitle[phase="error"] { color: $danger; }
+QLabel#downloadStateDetail, QLabel#downloadProgressLabel {
+    color: $muted;
+    font-size: 12px;
+}
+QProgressBar#downloadProgress {
+    background: $surface;
+    border: 1px solid $border;
+    border-radius: 8px;
+    text-align: center;
+    min-height: 20px;
+    max-height: 20px;
+    color: $text;
+    font-size: 11px;
+}
+QProgressBar#downloadProgress::chunk {
+    background: $accent;
+    border-radius: 7px;
+}
+
 /* ---------- Журнал ---------- */
 QPlainTextEdit#log {
     background: $log_bg;

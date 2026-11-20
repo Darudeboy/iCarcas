@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -52,11 +55,14 @@ from ios_restore.infrastructure.device_cli_adapter import DeviceCliAdapter
 from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAdapter
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
+from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
+from ios_restore.ui.onboarding import ensure_onboarding, show_help_dialog
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
 from ios_restore.ui.workers import (
     AuthInfoWorker,
     DetectDevicesWorker,
+    InspectPackageWorker,
     InstallAppWorker,
     PairDeviceWorker,
     RegionalSearchAppWorker,
@@ -266,6 +272,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("iCarcas")
+        self.setWindowIcon(load_app_icon())
         self.resize(640, 720)
         self.setMinimumSize(520, 480)
 
@@ -308,6 +315,16 @@ class MainWindow(QMainWindow):
         root.setSpacing(16)
 
         header = QHBoxLayout()
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(12)
+        self.brand_mark = StackingLogoWidget(self, size=44)
+        self.brand_mark.set_progress(1.0)
+        brand_row.addWidget(self.brand_mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        # Transparent PNG mark (no black plate) — works on light and dark.
+        self.brand_raster = QLabel()
+        self.brand_raster.setFixedSize(44, 44)
+        brand_row.addWidget(self.brand_raster, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._refresh_brand_mark()
         titles = QVBoxLayout()
         titles.setSpacing(2)
         self.title_label = QLabel()
@@ -318,7 +335,8 @@ class MainWindow(QMainWindow):
         sub.setObjectName("appSubtitle")
         titles.addWidget(self.title_label)
         titles.addWidget(sub)
-        header.addLayout(titles)
+        brand_row.addLayout(titles)
+        header.addLayout(brand_row)
         header.addStretch(1)
 
         right = QVBoxLayout()
@@ -326,10 +344,14 @@ class MainWindow(QMainWindow):
         theme_row = QHBoxLayout()
         theme_row.setSpacing(0)
         theme_row.addStretch(1)
+        self.help_button = make_button("Справка", "ghost")
+        self.help_button.setToolTip("Как пользоваться — кратко по шагам и кнопкам")
+        self.help_button.clicked.connect(lambda: show_help_dialog(self))
         self.theme_button = make_button("", "ghost")
         self.theme_button.setToolTip("Переключить светлую / тёмную тему")
         self.theme_button.clicked.connect(self._toggle_theme)
         self._refresh_theme_button()
+        theme_row.addWidget(self.help_button)
         theme_row.addWidget(self.theme_button)
         right.addLayout(theme_row)
         self.chip_device = Chip("iPhone не найден")
@@ -352,28 +374,12 @@ class MainWindow(QMainWindow):
         self.card_device.set_state("active")
         root.addWidget(self.card_device)
 
-        self.card_store = Card(
-            "App Store",
-            step=2,
-            hint=(
-                "Пароль Apple ID и 2FA — только в консоли ipatool. "
-                "Keychain passphrase можно сохранить на этом ПК (DPAPI)."
-            ),
-        )
-        limits = QLabel(
-            "Ограничения: только свой Apple ID и свои лицензии. "
-            "Поиск ID ≠ лицензия. DRM/пиратство не поддерживаются."
-        )
-        limits.setWordWrap(True)
-        limits.setObjectName("appSubtitle")
-        self.card_store.body.addWidget(limits)
+        self.card_store = Card("App Store", step=2)
         row = QHBoxLayout()
         row.setSpacing(10)
         self.login_button = make_button("Войти…")
         self.login_button.clicked.connect(self._on_login)
-        self.login_button.setToolTip(
-            "Войти в App Store (нужен для архива покупок и download IPA)"
-        )
+        self.login_button.setToolTip("Вход в Apple ID (пароль и 2FA — в консоли)")
         self.auth_info_button = make_button("Проверить сессию…")
         self.auth_info_button.clicked.connect(self._on_auth_info)
         self.logout_button = make_button("Выйти…", "danger")
@@ -385,13 +391,13 @@ class MainWindow(QMainWindow):
 
         pass_row = QHBoxLayout()
         pass_row.setSpacing(10)
-        self.remember_pass_button = make_button("Сохранить passphrase…")
+        self.remember_pass_button = make_button("Запомнить ключ…")
         self.remember_pass_button.setToolTip(
-            "Сохранить Keychain passphrase на этом ПК (Windows DPAPI). "
-            "Не путать с паролем Apple ID."
+            "Сохранить Keychain passphrase на этом ПК (не пароль Apple ID). "
+            "Подробнее — в Справке."
         )
         self.remember_pass_button.clicked.connect(self._on_save_passphrase)
-        self.clear_pass_button = make_button("Забыть passphrase", "ghost")
+        self.clear_pass_button = make_button("Забыть ключ", "ghost")
         self.clear_pass_button.clicked.connect(self._on_clear_passphrase)
         pass_row.addWidget(self.remember_pass_button, 1)
         pass_row.addWidget(self.clear_pass_button, 1)
@@ -404,23 +410,17 @@ class MainWindow(QMainWindow):
         archive_row = QHBoxLayout()
         archive_row.setSpacing(10)
         self.archive_button = make_button("Архив покупок…")
-        self.archive_button.setToolTip(
-            "Дамп покупок текущего Apple ID (сохранённый passphrase или ввод в консоли)"
-        )
+        self.archive_button.setToolTip("Список приложений с лицензией на этом Apple ID")
         self.archive_button.clicked.connect(self._on_archive_purchases)
         self.pickup_archive_button = make_button("Подхватить архив")
-        self.pickup_archive_button.setToolTip(
-            f"Читает {self._purchases_dump_path.name} после завершения дампа"
-        )
+        self.pickup_archive_button.setToolTip("Показать результат после дампа покупок")
         self.pickup_archive_button.clicked.connect(self._on_pickup_purchases_dump)
         archive_row.addWidget(self.archive_button, 1)
         archive_row.addWidget(self.pickup_archive_button, 1)
         self.card_store.body.addLayout(archive_row)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(
-            "Название, Store ID или bundle… (каталог + iTunes)"
-        )
+        self.search_input.setPlaceholderText("Название, Store ID или bundle…")
         self.search_input.setClearButtonEnabled(True)
         self.region_combo = QComboBox()
         self.region_combo.setObjectName("regionCombo")
@@ -432,9 +432,7 @@ class MainWindow(QMainWindow):
         self.regional_search_button = make_button("Найти ID…", "primary")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
         self.regional_search_button.setToolTip(
-            "Сначала локальный каталог (в т.ч. delisted), затем iTunes Lookup/Search "
-            "с отсечением нерелевантных результатов. "
-            "Скачивание — только при лицензии на текущем Apple ID."
+            "Найти Store ID. Скачивание — только при лицензии на аккаунте."
         )
         self.card_store.body.addWidget(self.search_input)
         self.card_store.body.addWidget(self.region_combo)
@@ -450,11 +448,11 @@ class MainWindow(QMainWindow):
         self.app_input.setClearButtonEnabled(True)
         self.card_app.body.addWidget(self.app_input)
         self.try_purchase_check = QCheckBox(
-            "Попробовать получить лицензию в текущем регионе (--purchase)"
+            "Попробовать оформить лицензию в текущем регионе"
         )
         self.try_purchase_check.setToolTip(
-            "Не обходит чужой регион: лицензия оформляется только если приложение "
-            "доступно на витрине текущего Apple ID (часто бесплатное)."
+            "Только если приложение доступно на витрине текущего Apple ID. "
+            "Чужой регион не открывает."
         )
         self.card_app.body.addWidget(self.try_purchase_check)
         row = QHBoxLayout()
@@ -486,6 +484,34 @@ class MainWindow(QMainWindow):
         versions_row.addWidget(self.pickup_versions_button, 1)
         versions_row.addWidget(self.catalog_button, 1)
         self.card_app.body.addLayout(versions_row)
+        self.download_status_panel = QFrame()
+        self.download_status_panel.setObjectName("downloadStatusPanel")
+        self.download_status_panel.setProperty("phase", "idle")
+        dl_status_layout = QVBoxLayout(self.download_status_panel)
+        dl_status_layout.setContentsMargins(12, 10, 12, 10)
+        dl_status_layout.setSpacing(6)
+        self.download_state_title = QLabel("Загрузка не запущена")
+        self.download_state_title.setObjectName("downloadStateTitle")
+        self.download_state_title.setProperty("phase", "idle")
+        dl_status_layout.addWidget(self.download_state_title)
+        self.download_state_detail = QLabel(
+            "После «Скачать IPA…» здесь будет видно: идёт ли закачка, сколько МБ и сколько времени прошло."
+        )
+        self.download_state_detail.setObjectName("downloadStateDetail")
+        self.download_state_detail.setWordWrap(True)
+        dl_status_layout.addWidget(self.download_state_detail)
+        self.download_progress = QProgressBar()
+        self.download_progress.setObjectName("downloadProgress")
+        self.download_progress.setRange(0, 100)
+        self.download_progress.setValue(0)
+        self.download_progress.setTextVisible(True)
+        self.download_progress.setFormat("%p%")
+        dl_status_layout.addWidget(self.download_progress)
+        self.download_progress_label = QLabel("")
+        self.download_progress_label.setObjectName("downloadProgressLabel")
+        self.download_progress_label.setWordWrap(True)
+        dl_status_layout.addWidget(self.download_progress_label)
+        self.card_app.body.addWidget(self.download_status_panel)
         dl_ctrl = QHBoxLayout()
         dl_ctrl.setSpacing(10)
         self.cancel_download_button = make_button("Отменить загрузку", "danger")
@@ -504,7 +530,30 @@ class MainWindow(QMainWindow):
         self._versions_dump_path: Path | None = None
         self._catalog_cache: list[CatalogApp] | None = None
         self._download_poll: QTimer | None = None
+        self._download_started_at: float | None = None
+        self._download_last_bytes: int = 0
+        self._download_last_bytes_at: float | None = None
+        self._download_peak_bytes: int = 0
         self._session_label: str | None = None
+
+        help_card = Card("Справка")
+        help_hint = QLabel(
+            "Кратко: устройство → войти → найти ID → скачать → установить. "
+            "Подробности и разбор кнопок — в справке."
+        )
+        help_hint.setWordWrap(True)
+        help_hint.setObjectName("appSubtitle")
+        help_card.body.addWidget(help_hint)
+        help_row = QHBoxLayout()
+        help_row.setSpacing(10)
+        self.open_help_button = make_button("Как пользоваться…", "primary")
+        self.open_help_button.clicked.connect(lambda: show_help_dialog(self))
+        self.replay_onboarding_button = make_button("Повторить обучение", "ghost")
+        self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
+        help_row.addWidget(self.open_help_button, 1)
+        help_row.addWidget(self.replay_onboarding_button, 1)
+        help_card.body.addLayout(help_row)
+        root.addWidget(help_card)
 
         log_card = Card("Журнал")
         self.btn_clear_log = make_button("Очистить", "ghost")
@@ -528,6 +577,26 @@ class MainWindow(QMainWindow):
         accent = PALETTES[self._mode]["accent"]
         self.title_label.setText(f'<span style="color:{accent}">i</span>Carcas')
 
+    def _refresh_brand_mark(self) -> None:
+        """Header mark: transparent raster if present, else procedural stack."""
+        from PySide6.QtGui import QPixmap
+
+        png = icon_png_path(transparent=True)
+        if png.is_file():
+            pix = QPixmap(str(png)).scaled(
+                44,
+                44,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.brand_raster.setPixmap(pix)
+            self.brand_raster.show()
+            self.brand_mark.hide()
+            return
+        self.brand_raster.hide()
+        self.brand_mark.set_progress(1.0)
+        self.brand_mark.show()
+
     def _refresh_theme_button(self) -> None:
         if self._mode == "dark":
             self.theme_button.setText("Светлая тема")
@@ -546,6 +615,7 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(build_stylesheet(mode))
         self._refresh_title()
         self._refresh_theme_button()
+        self._refresh_brand_mark()
         # Dynamic properties (chips / badges) need a polish pass after QSS swap.
         for widget in self.findChildren(QWidget):
             if widget.property("state") is not None or widget.property("variant") is not None:
@@ -587,11 +657,12 @@ class MainWindow(QMainWindow):
         self.pickup_archive_button.setEnabled(ok)
 
     def _bootstrap_tos_and_session(self) -> None:
-        if not ensure_tos_accepted(self):
+        if not ensure_onboarding(self):
             QMessageBox.information(
                 self,
                 "iCarcas",
-                "Без принятия условий download/install недоступны.",
+                "Без прохождения знакомства и условий download/install недоступны.\n"
+                "Откройте «Справка» или «Повторить обучение».",
             )
         self._refresh_passphrase_label()
         if self._appstore.session_files_present() and kc_pass.has_stored_passphrase():
@@ -603,26 +674,30 @@ class MainWindow(QMainWindow):
     def _require_tos(self) -> bool:
         if tos_accepted():
             return True
-        return ensure_tos_accepted(self)
+        # Re-open onboarding (includes ToS) if user skipped / reset.
+        return ensure_onboarding(self) and tos_accepted()
+
+    def _on_replay_onboarding(self) -> None:
+        from ios_restore.ui.onboarding import OnboardingDialog
+
+        dialog = OnboardingDialog(self)
+        dialog.exec()
+        self._refresh_passphrase_label()
 
     def _refresh_passphrase_label(self) -> None:
         if kc_pass.has_stored_passphrase():
-            self.passphrase_chip.setText(
-                "Keychain passphrase: сохранён на этом ПК (фоновые загрузки с ретраями)."
-            )
+            self.passphrase_chip.setText("Ключ сохранён на этом ПК.")
         else:
-            self.passphrase_chip.setText(
-                "Keychain passphrase: не сохранён — каждый шаг спросит в консоли."
-            )
+            self.passphrase_chip.setText("Ключ не сохранён — при необходимости спросит консоль.")
 
     def _on_save_passphrase(self) -> None:
         if not self._require_tos():
             return
         text, ok = QInputDialog.getText(
             self,
-            "Keychain passphrase",
-            "Введите Keychain passphrase ipatool\n"
-            "(НЕ пароль Apple ID). Будет сохранён через Windows DPAPI:",
+            "Запомнить ключ",
+            "Введите Keychain passphrase\n"
+            "(НЕ пароль Apple ID). Сохранится только на этом ПК:",
             QLineEdit.EchoMode.Password,
         )
         if not ok or not text.strip():
@@ -630,24 +705,32 @@ class MainWindow(QMainWindow):
         try:
             kc_pass.save_passphrase(text.strip())
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Passphrase", str(exc))
+            QMessageBox.warning(self, "Ключ", str(exc))
             return
         self._refresh_passphrase_label()
         QMessageBox.information(
             self,
-            "Passphrase",
-            "Сохранено. Download/архив/версии смогут идти с ретраями без повторного ввода.",
+            "Ключ",
+            "Сохранено. Загрузки смогут идти с повторами без повторного ввода.",
         )
 
     def _on_clear_passphrase(self) -> None:
         kc_pass.clear_passphrase()
         self._refresh_passphrase_label()
-        self.output.appendPlainText("Сохранённый Keychain passphrase удалён.")
+        self.output.appendPlainText("Сохранённый ключ удалён.")
 
     def _on_cancel_download(self) -> None:
         if self._appstore.cancel_active_process():
             self.cancel_download_button.setEnabled(False)
             self._stop_download_poll()
+            self._set_download_progress_ui(
+                phase="idle",
+                percent=0,
+                title="Загрузка отменена",
+                detail="Процесс остановлен. Можно запустить снова.",
+                label="",
+            )
+            self.card_app.set_state("idle", "Отменено")
             self.output.appendPlainText("Загрузка отменена.")
         else:
             QMessageBox.information(self, "Отмена", "Активной загрузки нет.")
@@ -698,11 +781,188 @@ class MainWindow(QMainWindow):
         )
         self._set_busy(False)
 
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        sec = max(0, int(seconds))
+        mins, rem = divmod(sec, 60)
+        return f"{mins:02d}:{rem:02d}"
+
+    def _set_download_panel_phase(self, phase: str) -> None:
+        self.download_status_panel.setProperty("phase", phase)
+        self.download_state_title.setProperty("phase", phase)
+        repolish(self.download_status_panel)
+        repolish(self.download_state_title)
+
+    def _set_download_progress_ui(
+        self,
+        *,
+        visible: bool = True,
+        percent: int | None = None,
+        indeterminate: bool = False,
+        label: str = "",
+        title: str | None = None,
+        detail: str | None = None,
+        phase: str = "idle",
+    ) -> None:
+        self.download_status_panel.setVisible(True)
+        self._set_download_panel_phase(phase)
+        if title is not None:
+            self.download_state_title.setText(title)
+        if detail is not None:
+            self.download_state_detail.setText(detail)
+        if label:
+            self.download_progress_label.setText(label)
+            self.download_progress_label.setVisible(True)
+        elif not visible:
+            self.download_progress_label.clear()
+
+        if phase == "idle" and not indeterminate and percent is None:
+            self.download_progress.setRange(0, 100)
+            self.download_progress.setValue(0)
+            self.download_progress.setFormat("—")
+            return
+        if indeterminate:
+            self.download_progress.setRange(0, 0)
+            self.download_progress.setFormat("идёт…")
+            return
+        self.download_progress.setRange(0, 100)
+        value = max(0, min(100, int(percent or 0)))
+        self.download_progress.setValue(value)
+        self.download_progress.setFormat(f"{value}%")
+
+    def _show_download_idle(self, detail: str | None = None) -> None:
+        self._download_started_at = None
+        self._download_last_bytes = 0
+        self._download_last_bytes_at = None
+        self._download_peak_bytes = 0
+        self._set_download_progress_ui(
+            phase="idle",
+            title="Загрузка не запущена",
+            detail=detail
+            or "Нажмите «Скачать IPA…» — здесь появится живой статус.",
+            label="",
+            percent=0,
+        )
+
+    def _refresh_live_download_status(self, progress: dict | None) -> None:
+        """Update panel while download process is still running."""
+        now = time.time()
+        started = self._download_started_at or now
+        elapsed = now - started
+        elapsed_txt = self._format_elapsed(elapsed)
+
+        preferred = getattr(self, "_download_store_id", None)
+        disk_bytes = self._appstore.measure_partial_download_bytes(
+            self._packages_dir, store_id=preferred
+        )
+        file_bytes = int((progress or {}).get("bytes") or 0)
+        bytes_done = max(disk_bytes, file_bytes, self._download_peak_bytes)
+        if bytes_done > self._download_peak_bytes:
+            self._download_peak_bytes = bytes_done
+
+        expected = int((progress or {}).get("expectedBytes") or 0)
+        attempt = int((progress or {}).get("attempt") or 0)
+        max_attempts = int((progress or {}).get("maxAttempts") or 5)
+        phase = str((progress or {}).get("phase") or "downloading")
+        raw_msg = str((progress or {}).get("message") or "").strip()
+
+        speed_txt = ""
+        if self._download_last_bytes_at is not None and bytes_done > self._download_last_bytes:
+            dt = max(0.2, now - self._download_last_bytes_at)
+            speed = (bytes_done - self._download_last_bytes) / dt / (1024 * 1024)
+            if speed >= 0.05:
+                speed_txt = f" · {speed:.1f} МБ/с"
+        if bytes_done != self._download_last_bytes:
+            self._download_last_bytes = bytes_done
+            self._download_last_bytes_at = now
+
+        mb = bytes_done / (1024 * 1024)
+        attempt_txt = f"попытка {attempt}/{max_attempts}" if attempt else "запуск"
+
+        if phase == "retry_wait":
+            self._set_download_progress_ui(
+                phase="running",
+                indeterminate=True,
+                title="Пауза перед повтором",
+                detail=raw_msg or "Сеть/504 — сейчас ждём и повторим автоматически.",
+                label=f"Прошло {elapsed_txt} · {attempt_txt}",
+            )
+            return
+
+        if bytes_done > 0:
+            if expected > 0:
+                pct = int(min(99, (bytes_done * 100) / expected))
+                self._set_download_progress_ui(
+                    phase="running",
+                    percent=pct,
+                    title="Идёт скачивание",
+                    detail=(
+                        f"Уже на диске: {mb:.1f} МБ из ~{expected / (1024 * 1024):.0f} МБ"
+                        f"{speed_txt}. Полоска растёт — загрузка реальная."
+                    ),
+                    label=f"Прошло {elapsed_txt} · {attempt_txt}",
+                )
+            else:
+                self._set_download_progress_ui(
+                    phase="running",
+                    indeterminate=True,
+                    title="Идёт скачивание",
+                    detail=(
+                        f"Уже на диске: {mb:.1f} МБ{speed_txt}. "
+                        "Размер заранее неизвестен — смотрите рост МБ."
+                    ),
+                    label=f"Прошло {elapsed_txt} · {attempt_txt}",
+                )
+            self.output.setPlainText(
+                f"Идёт скачивание IPA.\n"
+                f"Скачано: {mb:.1f} МБ{speed_txt}\n"
+                f"Время: {elapsed_txt} · {attempt_txt}\n"
+                "Можно «Отменить загрузку»."
+            )
+            return
+
+        # 0 bytes: still waiting for Apple / license / first chunk
+        wait_hint = (
+            "Процесс запущен, но байты ещё не пишутся. "
+            "ipatool часто молчит 1–3 минуты (лицензия/CDN). "
+            "Если таймер тикает — загрузка жива."
+        )
+        if elapsed >= 90:
+            wait_hint = (
+                "Уже больше 1.5 мин без МБ на диске. Обычно это ожидание Apple "
+                "или проверка лицензии. Подождите ещё или отмените и повторите."
+            )
+        self._set_download_progress_ui(
+            phase="running",
+            indeterminate=True,
+            title="Ожидание Apple…",
+            detail=wait_hint,
+            label=f"Прошло {elapsed_txt} · {attempt_txt} · пока 0 МБ",
+        )
+        self.output.setPlainText(
+            f"Загрузка запущена, ждём первые данные.\n"
+            f"Время: {elapsed_txt} · {attempt_txt}\n"
+            f"Скачано пока: 0 МБ\n\n"
+            "Это нормально в начале. Когда появятся МБ — статус сменится на "
+            "«Идёт скачивание»."
+        )
+
     def _start_download_poll(self) -> None:
         self._stop_download_poll()
         self.cancel_download_button.setEnabled(True)
+        self._download_started_at = time.time()
+        self._download_last_bytes = 0
+        self._download_last_bytes_at = self._download_started_at
+        self._download_peak_bytes = 0
+        self._set_download_progress_ui(
+            phase="running",
+            indeterminate=True,
+            title="Загрузка запущена",
+            detail="Стартуем ipatool. Через секунду здесь появится таймер и МБ.",
+            label="Прошло 00:00",
+        )
         timer = QTimer(self)
-        timer.setInterval(1500)
+        timer.setInterval(500)
         timer.timeout.connect(self._poll_download_result)
         self._download_poll = timer
         timer.start()
@@ -715,38 +975,127 @@ class MainWindow(QMainWindow):
         self.cancel_download_button.setEnabled(False)
 
     def _poll_download_result(self) -> None:
+        progress = self._appstore.read_download_progress(self._packages_dir)
         result = self._appstore.read_download_result(self._packages_dir)
         running = self._appstore.active_process_running()
         if result is None:
-            if not running:
-                # Interactive console mode — no result file yet.
-                self._stop_download_poll()
+            if running:
+                self._refresh_live_download_status(progress)
             else:
+                # Скрипт умер до download-result.json (раньше — синтаксическая ошибка PS).
+                self._stop_download_poll()
+                self.card_app.set_state("idle", "Сбой")
+                self._set_download_progress_ui(
+                    phase="error",
+                    percent=0,
+                    title="Загрузка оборвалась",
+                    detail=(
+                        "Фоновый скрипт завершился без результата. "
+                        "Это не «тихая» успешная закачка. Нажмите «Скачать IPA…» ещё раз."
+                    ),
+                    label="",
+                )
                 self.output.setPlainText(
-                    "Фоновая загрузка… ретраи при HTTP 504/таймауте.\n"
-                    "Можно «Отменить загрузку»."
+                    "Загрузка не выполнена: процесс завершился без download-result.json.\n"
+                    "Повторите «Скачать IPA…». Если снова сразу сбой — «Диагностика…»."
                 )
             return
         self._stop_download_poll()
-        if result.get("success"):
-            before = getattr(self, "_download_before_names", set())
-            package = self._appstore.wait_for_new_ipa(
+        before = getattr(self, "_download_before_names", set())
+        before_mtimes = getattr(self, "_download_before_mtimes", {})
+        preferred = getattr(self, "_download_store_id", None)
+        reused = bool(result.get("reused"))
+        fresh = bool(result.get("fresh"))
+        duration = result.get("durationSec")
+        ipa_from_result = str(result.get("ipaPath") or "").strip()
+        path = None
+        if ipa_from_result:
+            candidate = Path(ipa_from_result)
+            if candidate.is_file() and candidate.stat().st_size > 1024:
+                path = candidate
+        if path is None and result.get("success"):
+            # Только свежий файл после этой загрузки — без подхвата старого IPA.
+            path = self._appstore.find_ipa_path(
                 self._packages_dir,
                 before_names=before,
+                before_mtimes=before_mtimes,
                 timeout_sec=2.0,
+                preferred_store_id=preferred,
+                require_fresh=not reused,
+                allow_existing_fallback=bool(reused),
             )
-            if package is not None:
-                self._on_download_done(package)
+        if result.get("success"):
+            mb_note = ""
+            if path is not None:
+                mb_note = f" ({path.stat().st_size / (1024 * 1024):.1f} МБ)"
+            if reused or (path is not None and not fresh and path.name in before):
+                self._set_download_progress_ui(
+                    phase="ok",
+                    percent=100,
+                    title="Файл уже был на диске",
+                    detail=(
+                        f"Повторно с Apple не скачивалось{mb_note}. "
+                        "Это не новая закачка — можно ставить или удалить IPA и скачать снова."
+                    ),
+                    label=f"Попытка заняла {duration or '?'} с",
+                )
+                if path is not None:
+                    stamp = datetime.fromtimestamp(path.stat().st_mtime).strftime(
+                        "%d.%m.%Y %H:%M:%S"
+                    )
+                    self.output.setPlainText(
+                        "Это не новая закачка.\n"
+                        f"Использован существующий файл: {path}\n"
+                        f"Дата файла: {stamp}\n"
+                        f"Длительность попытки: {duration or '?'} с\n"
+                        "Чтобы качать заново — удалите этот .ipa из packages и повторите."
+                    )
+                    self._begin_inspect_ipa(path)
+                else:
+                    self.output.setPlainText(
+                        "ipatool сообщил success, но свежий IPA не найден.\n"
+                        "Нажмите «Подхватить IPA» для файла с диска."
+                    )
+                return
+            self._set_download_progress_ui(
+                phase="ok",
+                percent=100,
+                title="Скачивание завершено",
+                detail=f"Новый IPA получен за {duration or '?'} с{mb_note}. Читаю пакет…",
+                label="100%",
+            )
+            if path is not None:
+                self._begin_inspect_ipa(path)
                 return
             self.output.setPlainText(
-                "Download success, но IPA не найден в packages. "
+                "Download success, но новый IPA не найден в packages. "
                 "Нажмите «Подхватить IPA»."
             )
             return
+        # Ошибка загрузки — никогда не маскируем старым IPA как успех.
         err = str(result.get("error") or "download failed")
         hint = AppStoreCliAdapter.explain_download_failure(err)
-        self.output.setPlainText(f"Загрузка не удалась.\n{hint}\n\n{err[:1500]}")
-        QMessageBox.warning(self, "Загрузка", hint)
+        self._set_download_progress_ui(
+            phase="error",
+            percent=0,
+            title="Загрузка не удалась",
+            detail=hint,
+            label="",
+        )
+        self.card_app.set_state("idle", "Ошибка")
+        existing = self._appstore.find_ipa_path(
+            self._packages_dir,
+            preferred_store_id=preferred,
+            allow_existing_fallback=True,
+        )
+        extra = ""
+        if existing is not None:
+            extra = (
+                f"\n\nНа диске уже лежит старый файл:\n{existing.name}\n"
+                "Его можно «Подхватить IPA» без повторной загрузки."
+            )
+        self.output.setPlainText(f"Загрузка не удалась.\n{hint}\n\n{err[:1500]}{extra}")
+        QMessageBox.warning(self, "Загрузка", hint + extra)
 
     def _append_env_status(self) -> None:
         try:
@@ -803,16 +1152,11 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Авторизация", str(exc))
             return
-        QMessageBox.information(
-            self,
-            "Авторизация",
-            "Открыта консоль ipatool auth login.\n"
-            "Введите Apple ID, пароль, Keychain passphrase и 2FA там.\n"
-            "Дождитесь success=true.\n\n"
-            "Затем можно «Сохранить passphrase…» для фоновых загрузок.",
-        )
+        # Подсказки только в журнале — без модалки, которая блокирует UI.
         self.output.setPlainText(
-            "Ожидание login в консоли… После success нажмите «Проверить сессию…»."
+            "Открыта консоль входа.\n"
+            "Введите Apple ID, пароль, ключ сессии и 2FA.\n"
+            "После success → «Проверить сессию…», при желании «Запомнить ключ…»."
         )
 
     def _on_auth_info(self) -> None:
@@ -828,17 +1172,12 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Сессия", str(exc))
             return
-        QMessageBox.information(
-            self,
-            "Проверка сессии",
-            "В консоли ipatool спросит Keychain passphrase "
-            "(НЕ пароль Apple ID).\n"
-            "Или сохраните passphrase кнопкой выше — тогда проверка будет без консоли.",
-        )
         present = self._appstore.session_files_present()
         self.set_session_chip(present)
         self.output.setPlainText(
-            "Открыта консоль auth info.\n"
+            "Открыта консоль проверки сессии.\n"
+            "Введите ключ (НЕ пароль Apple ID) и закройте консоль после success.\n"
+            "Чтобы без консоли — «Запомнить ключ…».\n"
             f"Локальные файлы сессии: {'да' if present else 'нет'}."
         )
 
@@ -1230,7 +1569,7 @@ class MainWindow(QMainWindow):
             answer = QMessageBox.question(self, "Загрузка", msg)
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        before = self._appstore.list_ipa_names(self._packages_dir)
+        before_mtimes = self._appstore.list_ipa_mtimes(self._packages_dir)
         try:
             self._appstore.begin_interactive_download(
                 app,
@@ -1242,12 +1581,24 @@ class MainWindow(QMainWindow):
             hint = AppStoreCliAdapter.explain_download_failure(str(exc))
             QMessageBox.warning(self, "Загрузка", f"{exc}\n\n{hint}")
             return
-        self._download_before_names = before
+        self._download_before_names = set(before_mtimes.keys())
+        self._download_before_mtimes = before_mtimes
+        self._download_store_id = (app.store_id or "").strip() or None
         self.card_app.set_state("active", "Загрузка…")
         if headless:
+            existing_note = ""
+            sid = self._download_store_id
+            if sid and any(n.startswith(f"{sid}_") for n in before_mtimes):
+                existing_note = (
+                    "\nНа диске уже есть IPA с этим ID — если прогресс "
+                    "сразу 100%, файл могли не перекачать заново.\n"
+                )
             self.output.setPlainText(
-                "Фоновая загрузка запущена (ретраи при HTTP 504).\n"
-                "Дождитесь авто-подхвата или нажмите «Отменить загрузку».\n"
+                "Фоновая загрузка запущена.\n"
+                "Смотрите прогресс-бар в блоке «Приложение».\n"
+                "Дождитесь 100% / авто-подхвата или «Отменить загрузку»."
+                + existing_note
+                + "\n"
                 + AppStoreCliAdapter.explain_download_failure("license")
             )
             self._start_download_poll()
@@ -1586,21 +1937,91 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_pickup_ipa(self) -> None:
-        before = getattr(self, "_download_before_names", set())
-        package = self._appstore.wait_for_new_ipa(
-            self._packages_dir,
-            before_names=before,
-            timeout_sec=1.0,
-        )
-        if package is None:
+        raw = self.app_input.text().strip()
+        preferred = raw if raw.isdigit() else getattr(self, "_download_store_id", None)
+        path = self._choose_ipa_path(preferred_store_id=preferred)
+        if path is None:
+            return
+        self._begin_inspect_ipa(path)
+
+    def _choose_ipa_path(self, *, preferred_store_id: str | None) -> Path | None:
+        entries = self._appstore.list_ipa_entries(self._packages_dir)
+        if not entries:
             QMessageBox.information(
                 self,
                 "IPA",
-                f"В {self._packages_dir} пока нет .ipa.\n"
-                "Дождитесь окончания download в консоли и повторите.",
+                f"В {self._packages_dir} нет .ipa.\n"
+                "Сначала скачайте приложение или положите файл в packages.",
             )
-            return
-        self._on_download_done(package)
+            return None
+
+        before = getattr(self, "_download_before_names", set())
+        auto = self._appstore.find_ipa_path(
+            self._packages_dir,
+            before_names=before,
+            preferred_store_id=preferred_store_id,
+        )
+        # Один явный match по Store ID — без диалога.
+        sid = (preferred_store_id or "").strip()
+        if sid.isdigit():
+            matched = [e for e in entries if e[0].name.startswith(f"{sid}_")]
+            if len(matched) == 1:
+                return matched[0][0]
+            if matched:
+                entries = matched + [e for e in entries if e not in matched]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Выберите IPA")
+        dialog.setMinimumWidth(560)
+        dialog.setStyleSheet(_DIALOG_QSS)
+        layout = QVBoxLayout(dialog)
+        hint = preferred_store_id or "новейший"
+        layout.addWidget(
+            QLabel(f"Файлы в packages (предпочтение: {hint}):")
+        )
+        table = QTableWidget(len(entries), 3, dialog)
+        table.setHorizontalHeaderLabels(["Файл", "МБ", "Дата"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        preselect = 0
+        for row, (path, size, mtime) in enumerate(entries):
+            table.setItem(row, 0, QTableWidgetItem(path.name))
+            table.setItem(row, 1, QTableWidgetItem(f"{size / (1024 * 1024):.1f}"))
+            table.setItem(
+                row,
+                2,
+                QTableWidgetItem(datetime.fromtimestamp(mtime).strftime("%d.%m %H:%M")),
+            )
+            if auto is not None and path == auto:
+                preselect = row
+        table.selectRow(preselect)
+        layout.addWidget(table)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        table.doubleClicked.connect(dialog.accept)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        row = table.currentRow()
+        if row < 0 or row >= len(entries):
+            return None
+        return entries[row][0]
+
+    def _begin_inspect_ipa(self, path: Path) -> None:
+        self._set_busy(True, f"Читаю IPA… {path.name}")
+        self.output.setPlainText(
+            f"Подхватываю {path.name}\n"
+            "Чтение архива и SHA-256 для больших файлов может занять минуту…"
+        )
+        worker = InspectPackageWorker(self._appstore, str(path))
+        worker.signals.finished.connect(self._on_download_done)
+        worker.signals.failed.connect(self._on_worker_failed)
+        self._thread_pool.start(worker)
 
     def _on_install(self) -> None:
         if self._busy or self._package is None:
@@ -1692,6 +2113,15 @@ class MainWindow(QMainWindow):
         self._package = package
         self.install_button.setEnabled(True)
         self.card_app.set_state("done", "IPA готов")
+        name = Path(package.local_path).name
+        mb = package.size_bytes / (1024 * 1024)
+        self._set_download_progress_ui(
+            phase="ok",
+            percent=100,
+            title="IPA готов к установке",
+            detail=f"{name} · {mb:.1f} МБ",
+            label="Можно нажать «Установить на iPhone»",
+        )
         self.output.setPlainText(
             "IPA подхвачен.\n"
             f"Путь: {package.local_path}\n"
@@ -1757,6 +2187,9 @@ class MainWindow(QMainWindow):
             self.remember_pass_button,
             self.clear_pass_button,
             self.diag_button,
+            self.help_button,
+            self.open_help_button,
+            self.replay_onboarding_button,
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)

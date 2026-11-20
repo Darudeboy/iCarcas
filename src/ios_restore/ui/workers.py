@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
 from ios_restore.application.restore_service import DemoScenarioResult, RestoreService
@@ -212,6 +214,26 @@ class RegionalSearchAppWorker(QRunnable):
             else:
                 results = self.adapter.search_region(self.term, self.region_code)
             self.signals.finished.emit(results)
+        except RestoreError as exc:
+            self.signals.failed.emit(_format_restore_error(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.signals.failed.emit(str(exc))
+
+
+class InspectPackageWorker(QRunnable):
+    """Heavy IPA inspect (zip + sha256) off the UI thread."""
+
+    def __init__(self, adapter: AppStoreCliAdapter, path: str) -> None:
+        super().__init__()
+        self.adapter = adapter
+        self.path = path
+        self.signals = WorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            package = self.adapter.inspect_package(Path(self.path))
+            self.signals.finished.emit(package)
         except RestoreError as exc:
             self.signals.failed.emit(_format_restore_error(exc))
         except Exception as exc:  # noqa: BLE001
