@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser, QVBoxLayout, QWidget
@@ -11,6 +12,12 @@ from ios_restore.infrastructure.paths import project_root
 
 def changelog_path() -> Path:
     return project_root() / "CHANGELOG.md"
+
+
+def _inline_md(text: str) -> str:
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+    return text
 
 
 def load_changelog_html(limit_sections: int = 3) -> str:
@@ -31,24 +38,55 @@ def load_changelog_html(limit_sections: int = 3) -> str:
     if current and len(sections) < limit_sections:
         sections.append("\n".join(current))
     body = "\n\n".join(sections) if sections else text
-    # Minimal markdown → HTML for headings and lists.
-    html_lines: list[str] = ["<h2>Что нового</h2>"]
+
+    html_lines: list[str] = [
+        "<style>"
+        "body { font-family: 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.45; }"
+        "h2 { margin: 0 0 12px 0; font-size: 18px; }"
+        "h3 { margin: 18px 0 8px 0; font-size: 15px; }"
+        "h4 { margin: 14px 0 6px 0; font-size: 14px; }"
+        "p { margin: 0 0 10px 0; }"
+        "ul { margin: 0 0 12px 18px; padding: 0; }"
+        "li { margin: 0 0 6px 0; }"
+        "</style>",
+        "<h2>Что нового</h2>",
+    ]
+    in_list = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            html_lines.append("</ul>")
+            in_list = False
+
     for line in body.splitlines():
-        if line.startswith("# "):
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
             continue
-        if line.startswith("## "):
-            html_lines.append(f"<h3>{line[3:].strip()}</h3>")
-        elif line.startswith("- "):
-            html_lines.append(f"<p>• {line[2:].strip()}</p>")
-        elif line.strip():
-            html_lines.append(f"<p>{line.strip()}</p>")
+        if stripped.startswith("### "):
+            close_list()
+            html_lines.append(f"<h4>{_inline_md(stripped[4:])}</h4>")
+        elif stripped.startswith("## "):
+            close_list()
+            html_lines.append(f"<h3>{_inline_md(stripped[3:])}</h3>")
+        elif stripped.startswith("- "):
+            if not in_list:
+                html_lines.append("<ul>")
+                in_list = True
+            html_lines.append(f"<li>{_inline_md(stripped[2:])}</li>")
+        elif stripped:
+            close_list()
+            html_lines.append(f"<p>{_inline_md(stripped)}</p>")
+        else:
+            close_list()
+    close_list()
     return "\n".join(html_lines)
 
 
 def show_release_notes_dialog(parent: QWidget | None = None) -> None:
     dialog = QDialog(parent)
     dialog.setWindowTitle("Что нового")
-    dialog.resize(520, 480)
+    dialog.resize(560, 560)
     layout = QVBoxLayout(dialog)
     browser = QTextBrowser(dialog)
     browser.setOpenExternalLinks(True)

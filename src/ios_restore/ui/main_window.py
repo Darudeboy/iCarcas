@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -61,7 +62,11 @@ from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
 from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
-from ios_restore.ui.onboarding import ensure_onboarding, show_help_dialog
+from ios_restore.ui.onboarding import (
+    ensure_onboarding,
+    show_help_dialog,
+    show_setup_dialog,
+)
 from ios_restore.ui.release_notes import show_release_notes_dialog
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
@@ -291,8 +296,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("iCarcas")
         self.setWindowIcon(load_app_icon())
-        self.resize(640, 720)
-        self.setMinimumSize(520, 480)
+        # Wider default: region chips + 3-button rows need room; 640 clipped the right edge.
+        self.resize(880, 780)
+        self.setMinimumSize(760, 560)
 
         self._thread_pool = QThreadPool.globalInstance()
         self._packages_dir = packages_dir or (Path.cwd() / "packages")
@@ -312,6 +318,10 @@ class MainWindow(QMainWindow):
         self._purchases_cache: list[PurchasedApp] | None = None
         self._account_storefront: str | None = None
         self._last_display_name: str | None = None
+        # Defer ToS/onboarding until the window is actually shown so BrandSplash
+        # can finish its layer animation on first run (singleShot(0) stole the
+        # event loop with a modal dialog while the splash was still up).
+        self._bootstrap_scheduled = False
 
         shell = QWidget()
         shell.setObjectName("root")
@@ -324,7 +334,7 @@ class MainWindow(QMainWindow):
         scroll.setObjectName("mainScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         shell_layout.addWidget(scroll)
 
@@ -354,7 +364,7 @@ class MainWindow(QMainWindow):
         self.title_label.setObjectName("appTitle")
         self.title_label.setTextFormat(Qt.TextFormat.RichText)
         self._refresh_title()
-        sub = QLabel("Восстановление своих приложений на iPhone")
+        sub = QLabel("Восстановление своих приложений на iOS (iPhone / iPad)")
         sub.setObjectName("appSubtitle")
         titles.addWidget(self.title_label)
         titles.addWidget(sub)
@@ -367,8 +377,8 @@ class MainWindow(QMainWindow):
         corner_row = QHBoxLayout()
         corner_row.setSpacing(8)
         corner_row.addStretch(1)
-        self.device_button = make_corner_button("iPhone…")
-        self.device_button.setToolTip("Найти устройство или возобновить подключение")
+        self.device_button = make_corner_button("iOS…")
+        self.device_button.setToolTip("Найти iPhone / iPad или возобновить подключение")
         self._rebuild_device_menu()
         self.session_button = make_corner_button("Войти…")
         self.session_button.setToolTip("Сессия App Store: войти или возобновить")
@@ -441,20 +451,22 @@ class MainWindow(QMainWindow):
         self.search_input.setClearButtonEnabled(True)
         self._region_code = "RU"
         self._region_tags: dict[str, QPushButton] = {}
-        region_row = QHBoxLayout()
-        region_row.setSpacing(6)
-        for region in RegionalAppSearchService.known_regions():
+        region_grid = QGridLayout()
+        region_grid.setHorizontalSpacing(6)
+        region_grid.setVerticalSpacing(6)
+        region_cols = 4
+        for index, region in enumerate(RegionalAppSearchService.known_regions()):
             tag = QPushButton(region.name)
             tag.setObjectName("regionTag")
             tag.setCursor(Qt.CursorShape.PointingHandCursor)
             tag.setCheckable(False)
+            tag.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             tag.setToolTip(f"Регион App Store: {region.name} ({region.code})")
             tag.clicked.connect(
                 lambda _checked=False, code=region.code: self._select_region(code)
             )
             self._region_tags[region.code] = tag
-            region_row.addWidget(tag)
-        region_row.addStretch(1)
+            region_grid.addWidget(tag, index // region_cols, index % region_cols)
         self._select_region("RU")
         self.regional_search_button = make_button("Найти ID…", "primary")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
@@ -462,7 +474,7 @@ class MainWindow(QMainWindow):
             "Найти Store ID. Скачивание — только при лицензии на аккаунте."
         )
         self.card_store.body.addWidget(self.search_input)
-        self.card_store.body.addLayout(region_row)
+        self.card_store.body.addLayout(region_grid)
         self.card_store.body.addWidget(self.regional_search_button)
         self.card_store.set_state("active")
         root.addWidget(self.card_store)
@@ -554,7 +566,7 @@ class MainWindow(QMainWindow):
         dl_ctrl.addWidget(self.cancel_download_button, 1)
         dl_ctrl.addWidget(self.diag_button, 1)
         self.card_app.body.addLayout(dl_ctrl)
-        self.install_button = make_button("Установить на iPhone", "primary")
+        self.install_button = make_button("Установить на устройство", "primary")
         self.install_button.setEnabled(False)
         self.install_button.clicked.connect(self._on_install)
         self.card_app.body.addWidget(self.install_button)
@@ -568,13 +580,14 @@ class MainWindow(QMainWindow):
         self._download_peak_bytes: int = 0
 
         help_card = Card("Справка")
-        help_hint = QLabel(
-            "Кратко: в углу — iPhone и Войти → найти ID → скачать → установить. "
-            "Данные УЗ только локально. Подробности — в справке и «Что нового»."
+        self.open_setup_button = make_button("Новый ПК…", "ghost")
+        self.open_setup_button.setToolTip(
+            "Python, tools/libimobiledevice и Apple Mobile Device Support"
         )
-        help_hint.setWordWrap(True)
-        help_hint.setObjectName("appSubtitle")
-        help_card.body.addWidget(help_hint)
+        self.open_setup_button.clicked.connect(lambda: show_setup_dialog(self))
+        help_head = help_card.layout().itemAt(0).layout()
+        assert isinstance(help_head, QHBoxLayout)
+        help_head.insertWidget(2, self.open_setup_button)
         help_row = QHBoxLayout()
         help_row.setSpacing(10)
         self.open_help_button = make_button("Как пользоваться…", "primary")
@@ -607,6 +620,12 @@ class MainWindow(QMainWindow):
         self._append_env_status()
         session_ok = self._appstore.session_files_present()
         self.set_session_chip(session_ok)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._bootstrap_scheduled:
+            return
+        self._bootstrap_scheduled = True
         QTimer.singleShot(0, self._bootstrap_tos_and_session)
 
     def _refresh_title(self) -> None:
@@ -699,9 +718,9 @@ class MainWindow(QMainWindow):
         if found and name:
             label = name if len(name) <= 22 else name[:20] + "…"
         elif found:
-            label = "iPhone OK"
+            label = "iOS OK"
         else:
-            label = "iPhone…"
+            label = "iOS…"
         self._paint_device_corner(state="ok" if found else "idle", text=label)
         self.chip_device.set_state(found, label)
         if found:
@@ -1229,7 +1248,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Доверие",
-            "Разблокируйте iPhone и при запросе нажмите «Доверять».",
+            "Разблокируйте устройство и при запросе нажмите «Доверять».",
         )
         self.set_device_working("Связь…")
         self._set_busy(True, f"Установка доверия для {device.device_id}…")
@@ -2254,7 +2273,7 @@ class MainWindow(QMainWindow):
                 self,
                 "iOS слишком старая",
                 "Устройство, похоже, не тянет минимальную iOS этого IPA.\n\n"
-                f"iPhone: iOS {device.os_version or '?'}\n"
+                f"Устройство: iOS {device.os_version or '?'}\n"
                 f"IPA требует: {pkg.minimum_os_version}\n\n"
                 "Всё равно попытаться установить?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2346,7 +2365,7 @@ class MainWindow(QMainWindow):
             percent=100,
             title="IPA готов к установке",
             detail=f"{display} · {name} · {mb:.1f} МБ",
-            label="Можно нажать «Установить на iPhone»",
+            label="Можно нажать «Установить на устройство»",
         )
         self.output.setPlainText(
             f"IPA готов: {display}\n"
@@ -2354,7 +2373,7 @@ class MainWindow(QMainWindow):
             f"bundle_id: {package.bundle_id or '—'} · "
             f"version: {package.version or '—'} · "
             f"min iOS: {package.minimum_os_version or '—'}\n"
-            "Можно устанавливать на iPhone."
+            "Можно устанавливать на iPhone / iPad."
         )
         self._set_busy(False)
 
@@ -2381,14 +2400,14 @@ class MainWindow(QMainWindow):
         show_install_success_dialog(
             self,
             app_name=str(app_name),
-            device_name=(device.display_name if device else str(payload.get("device_id") or "iPhone")),
+            device_name=(device.display_name if device else str(payload.get("device_id") or "устройство")),
             version=pkg.version if pkg else None,
             dialog_qss=_DIALOG_QSS,
         )
         self.output.setPlainText(
             f"Установлено: {app_name}\n"
             f"Устройство: {payload.get('device_id')}\n"
-            "Откройте приложение на iPhone."
+            "Откройте приложение на iPhone / iPad."
         )
 
     def _on_device_worker_failed(self, message: str) -> None:

@@ -8,7 +8,7 @@
     QFrame#card            -> карточка
     QLabel#stepBadge       -> кружок шага, property state = idle | active | done
     QLabel#chip            -> плашка статуса, property state = idle | ok
-    QToolButton#cornerChip -> угол: iPhone / сессия
+    QToolButton#cornerChip -> угол: iOS / сессия
     QLabel#privacyNotice   -> локальное хранение УЗ
     QPlainTextEdit#log     -> журнал
 """
@@ -21,7 +21,7 @@ PALETTES: dict[str, dict[str, str]] = {
         "bg": "#0F1117", "surface": "#171A22", "surface2": "#1E222C",
         "hover": "#262B37", "pressed": "#2E3441",
         "border": "#272C38", "border_strong": "#3A4152",
-        "text": "#E8EAF0", "muted": "#8B93A5",
+        "text": "#E8EAF0", "muted": "#A0A8BA",
         "accent": "#5B8DEF", "accent_hover": "#7AA3F5", "accent_text": "#0B1220",
         "accent_dim": "#243252", "accent_dim_text": "#7C8DB5",
         "danger": "#F27D7D", "danger_bg": "#2A1A1E", "danger_border": "#5A2D35",
@@ -32,7 +32,7 @@ PALETTES: dict[str, dict[str, str]] = {
         "bg": "#F3F4F8", "surface": "#FFFFFF", "surface2": "#F4F5F9",
         "hover": "#E9ECF3", "pressed": "#DFE3EC",
         "border": "#E1E4EC", "border_strong": "#C8CEDB",
-        "text": "#171A22", "muted": "#6B7385",
+        "text": "#171A22", "muted": "#4F5668",
         "accent": "#2F6BFF", "accent_hover": "#4B80FF", "accent_text": "#FFFFFF",
         "accent_dim": "#C9D6F7", "accent_dim_text": "#6F83B8",
         "danger": "#D6404B", "danger_bg": "#FDEEEF", "danger_border": "#F2B8BD",
@@ -44,8 +44,8 @@ PALETTES: dict[str, dict[str, str]] = {
 _QSS = Template(
     """
 * {
-    font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", sans-serif;
-    font-size: 13px;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", sans-serif;
+    font-size: 14px;
     color: $text;
 }
 QWidget#root { background: $bg; }
@@ -54,8 +54,16 @@ QScrollArea#mainScroll > QWidget > QWidget { background: $bg; }
 
 /* ---------- Заголовок ---------- */
 QLabel#appTitle { font-size: 28px; font-weight: 700; }
-QLabel#appSubtitle, QLabel#hint { color: $muted; }
-QLabel#hint { font-size: 12px; }
+QLabel#appSubtitle {
+    color: $muted;
+    font-size: 14px;
+    line-height: 1.35;
+}
+QLabel#hint {
+    color: $muted;
+    font-size: 13px;
+    line-height: 1.4;
+}
 
 /* ---------- Карточки ---------- */
 QFrame#card {
@@ -63,8 +71,8 @@ QFrame#card {
     border: 1px solid $border;
     border-radius: 16px;
 }
-QLabel#cardTitle { font-size: 15px; font-weight: 600; }
-QLabel#cardStatus { color: $muted; font-size: 12px; }
+QLabel#cardTitle { font-size: 16px; font-weight: 600; }
+QLabel#cardStatus { color: $muted; font-size: 13px; }
 
 /* ---------- Шаги ---------- */
 QLabel#stepBadge {
@@ -88,7 +96,8 @@ QLabel#chip[state="ok"] { background: $ok_bg; color: $ok; border-color: $ok_bord
 QToolButton#cornerChip {
     background: $surface; color: $muted;
     border: 1px solid $border; border-radius: 12px;
-    padding: 6px 14px; font-size: 12px; font-weight: 600;
+    padding: 6px 14px; font-size: 13px; font-weight: 600;
+    min-width: 88px;
 }
 QToolButton#cornerChip[state="ok"],
 QToolButton#cornerChip[state="busy"] {
@@ -106,8 +115,15 @@ QToolButton#cornerChip[state="busy"]:disabled {
 }
 
 QLabel#privacyNotice {
-    color: $muted; font-size: 12px;
-    padding: 2px 2px 4px 2px;
+    color: $muted;
+    font-size: 13px;
+    line-height: 1.4;
+    padding: 2px 2px 6px 2px;
+}
+QLabel#helpBody {
+    color: $text;
+    font-size: 14px;
+    line-height: 1.45;
 }
 
 QPushButton#regionTag {
@@ -202,17 +218,18 @@ QLabel#downloadStateTitle[phase="ok"] { color: $ok; }
 QLabel#downloadStateTitle[phase="error"] { color: $danger; }
 QLabel#downloadStateDetail, QLabel#downloadProgressLabel {
     color: $muted;
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.4;
 }
 QProgressBar#downloadProgress {
     background: $surface;
     border: 1px solid $border;
     border-radius: 8px;
     text-align: center;
-    min-height: 20px;
-    max-height: 20px;
+    min-height: 22px;
+    max-height: 22px;
     color: $text;
-    font-size: 11px;
+    font-size: 12px;
 }
 QProgressBar#downloadProgress::chunk {
     background: $accent;
@@ -226,7 +243,7 @@ QPlainTextEdit#log {
     border-radius: 10px;
     padding: 10px;
     font-family: "Cascadia Mono", "Cascadia Code", "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
     color: $muted;
     selection-background-color: $accent;
     selection-color: $accent_text;

@@ -22,52 +22,49 @@ ONBOARDING_VERSION = "1"
 ONBOARDING_KEY = "onboarding/completed_version"
 
 HELP_HTML = """
-<h3>Как пользоваться</h3>
-<ol>
-<li><b>iPhone…</b> (угол) — подключите кабель → «Найти устройство» →
-при необходимости «Установить доверие» (Trust на телефоне).</li>
-<li><b>Войти…</b> (угол) — консоль: Apple ID, пароль и 2FA.
-Если сессия уже была — «Проверить» / «Возобновить вход».</li>
-<li><b>Запомнить ключ</b> — в меню сессии: Keychain passphrase (не пароль Apple ID).
-Хранится только локально; с ним загрузки повторяются при сбоях сети.</li>
-<li><b>Найти ID / каталог</b> — узнать номер приложения. Это ещё не лицензия.</li>
-<li><b>Скачать IPA</b> — только если приложение уже было на этом Apple ID.</li>
-<li><b>Установить</b> — на найденный iPhone.</li>
-</ol>
-
-<h3>Кнопки</h3>
+<p>
+iCarcas — личная утилита для <b>iOS</b>: скачать приложения с вашего Apple ID
+и поставить на <b>iPhone или iPad</b>. Учётные данные остаются только на этом ПК.
+</p>
+<p>
+В углу: <b>iOS…</b> (кабель, «Доверять») и <b>Войти…</b> (Apple ID в консоли).
+Дальше: найти ID → скачать IPA → <b>Установить на устройство</b>.
+«Найти ID» лицензию не даёт — качается только то, что уже было на аккаунте.
+</p>
 <ul>
-<li><b>iPhone… / Войти…</b> — компактное меню в правом верхнем углу.</li>
-<li><b>Что нового</b> — изменения с последнего релиза (рядом со справкой).</li>
-<li><b>Архив покупок</b> — список приложений с лицензией на аккаунте.</li>
-<li><b>Подхватить архив / IPA</b> — прочитать результат после консоли.</li>
-<li><b>Найти ID</b> — поиск в каталоге и App Store по региону.</li>
-<li><b>Версии</b> — скачать не последнюю сборку (если Apple ещё отдаёт).</li>
-<li><b>Каталог ID</b> — готовый список Store ID (в т.ч. снятые с витрины).</li>
-<li><b>Диагностика</b> — zip без паролей и IPA для разбора проблем.</li>
+<li><b>Архив покупок</b> — приложения с лицензией на аккаунте.</li>
+<li><b>Версии / Каталог ID</b> — старые сборки и список Store ID.</li>
+<li><b>Диагностика</b> — zip без паролей и IPA.</li>
 </ul>
+"""
 
-<h3>Приватность</h3>
-<ul>
-<li>Учётные данные и ключ сессии <b>хранятся только на этом компьютере</b>
-и <b>никуда не передаются</b> (нет облака iCarcas).</li>
-<li>Только <b>свой</b> Apple ID и <b>свои</b> покупки/загрузки.</li>
-<li>Поиск ID ≠ право скачать. Без лицензии будет ошибка license.</li>
-<li>Обход DRM / пиратские IPA не поддерживаются.</li>
-<li>HTTP 504 — временный сбой Apple; при сохранённом ключе iCarcas повторит попытки.</li>
-</ul>
+SETUP_HTML = """
+<p>
+На <b>новом компьютере</b> одного клона репозитория мало.
+</p>
+<p>
+Нужны <b>Python 3.12+</b>, папка <code>tools/libimobiledevice</code>
+(idevice_* и ipatool — их <b>нет в git clone</b>) и на Windows —
+<b>Apple Mobile Device Support</b>
+(<code>winget install --id Apple.AppleMobileDeviceSupport -e</code>).
+Без этого устройство может быть видно в проводнике, но не в iCarcas.
+</p>
+<p>
+Проверка: <code>.\\scripts\\check-tools.ps1</code>.
+Подробности — README и <code>docs/setup.md</code>.
+</p>
 """
 
 _PAGES: tuple[tuple[str, str], ...] = (
     (
         "Добро пожаловать в iCarcas",
-        "Личная утилита: скачать свои приложения из App Store "
-        "и поставить на свой iPhone.\n\n"
+        "Личная утилита под iOS: скачать свои приложения из App Store "
+        "и поставить на iPhone или iPad.\n\n"
         "Дальше коротко — что делать и чего ждать.",
     ),
     (
         "Три шага",
-        "1) В углу «iPhone…» — найти устройство.\n"
+        "1) В углу «iOS…» — найти iPhone или iPad.\n"
         "2) В углу «Войти…» — свой Apple ID (пароль и 2FA в отдельной консоли).\n"
         "3) Найти приложение → скачать IPA → установить.\n\n"
         "Консоль спрашивает ещё Keychain passphrase — это не пароль Apple ID, "
@@ -94,14 +91,21 @@ def mark_onboarding_done(settings: QSettings | None = None) -> None:
     store.setValue(ONBOARDING_KEY, ONBOARDING_VERSION)
 
 
-def show_help_dialog(parent: QWidget | None = None) -> None:
+def _show_html_dialog(
+    parent: QWidget | None,
+    *,
+    title: str,
+    html: str,
+    width: int = 520,
+    height: int = 420,
+) -> None:
     dialog = QDialog(parent)
-    dialog.setWindowTitle("Справка — как пользоваться")
-    dialog.resize(560, 520)
+    dialog.setWindowTitle(title)
+    dialog.resize(width, height)
     layout = QVBoxLayout(dialog)
     browser = QTextBrowser(dialog)
     browser.setOpenExternalLinks(False)
-    browser.setHtml(HELP_HTML)
+    browser.setHtml(html)
     layout.addWidget(browser)
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
     buttons.rejected.connect(dialog.reject)
@@ -111,6 +115,26 @@ def show_help_dialog(parent: QWidget | None = None) -> None:
         close_btn.clicked.connect(dialog.accept)
     layout.addWidget(buttons)
     dialog.exec()
+
+
+def show_help_dialog(parent: QWidget | None = None) -> None:
+    _show_html_dialog(
+        parent,
+        title="Справка — как пользоваться",
+        html=HELP_HTML,
+        width=560,
+        height=480,
+    )
+
+
+def show_setup_dialog(parent: QWidget | None = None) -> None:
+    _show_html_dialog(
+        parent,
+        title="Справка — новый ПК",
+        html=SETUP_HTML,
+        width=520,
+        height=360,
+    )
 
 
 class OnboardingDialog(QDialog):

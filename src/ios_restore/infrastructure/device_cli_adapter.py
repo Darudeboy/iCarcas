@@ -59,7 +59,7 @@ class DeviceCliAdapter:
                     raise RestoreError(
                         ErrorCode.DEVICE_TRUST_REQUIRED,
                         "Устройство обнаружено, но недоступно для операций "
-                        "(проверьте доверие на iPhone).",
+                        "(проверьте доверие на экране устройства).",
                     )
                 self._selected = device
                 return device
@@ -89,7 +89,7 @@ class DeviceCliAdapter:
                 pair.stderr or pair.stdout,
                 fallback_message=(
                     "Не удалось установить доверенную связь. "
-                    "Разблокируйте iPhone и нажмите «Доверять»."
+                    "Разблокируйте устройство и нажмите «Доверять»."
                 ),
             )
 
@@ -142,7 +142,7 @@ class DeviceCliAdapter:
         if "passcode" in lower:
             return RestoreError(
                 ErrorCode.DEVICE_TRUST_REQUIRED,
-                "iPhone заблокирован. Разблокируйте устройство код-паролем и повторите.",
+                "Устройство заблокировано. Разблокируйте экран код-паролем и повторите.",
                 details=details,
             )
         if (
@@ -155,7 +155,7 @@ class DeviceCliAdapter:
         ):
             return RestoreError(
                 ErrorCode.DEVICE_TRUST_REQUIRED,
-                "Нужно доверие к компьютеру. Разблокируйте iPhone и подтвердите «Доверять».",
+                "Нужно доверие к компьютеру. Разблокируйте устройство и подтвердите «Доверять».",
                 details=details,
             )
         return RestoreError(

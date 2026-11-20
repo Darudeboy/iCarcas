@@ -133,7 +133,7 @@ def show_install_success_dialog(
     body = QLabel(
         f"Установлено на «{device_name}».\n"
         + (f"Версия: {version}\n" if version else "")
-        + "Откройте приложение на iPhone — запуск из iCarcas не проверяется."
+        + "Откройте приложение на iPhone / iPad — запуск из iCarcas не проверяется."
     )
     body.setWordWrap(True)
     layout.addWidget(body)

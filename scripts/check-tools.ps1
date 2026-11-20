@@ -1,4 +1,4 @@
-# Verify local ipatool / libimobiledevice binaries for personal portable use.
+﻿# Verify local ipatool / libimobiledevice binaries for personal portable use.
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -12,9 +12,22 @@ $needed = @(
     'idevicepair.exe'
 )
 
+function Write-SetupHints {
+    Write-Host ""
+    Write-Host "These files are NOT in git clone (tools/libimobiledevice is gitignored)."
+    Write-Host "1) libimobiledevice Windows suite:"
+    Write-Host "   https://github.com/L1ghtmann/libimobiledevice/releases/tag/suite-exe-21d57a9"
+    Write-Host "   Unpack exe+dll into: $tools"
+    Write-Host "2) ipatool (Windows amd64) as $tools\ipatool.exe"
+    Write-Host "   https://github.com/majd/ipatool/releases"
+    Write-Host "3) Windows: Apple Mobile Device Support"
+    Write-Host "   winget install --id Apple.AppleMobileDeviceSupport -e"
+    Write-Host "See docs\setup.md and README.md"
+}
+
 if (-not (Test-Path $tools)) {
-    Write-Host "Нет каталога tools\libimobiledevice"
-    Write-Host "Положите Windows-сборку libimobiledevice + ipatool.exe туда."
+    Write-Host "Missing directory tools\libimobiledevice"
+    Write-SetupHints
     exit 1
 }
 
@@ -24,18 +37,28 @@ foreach ($name in $needed) {
     if (Test-Path $path) {
         Write-Host "OK  $name"
     } else {
-        Write-Host "НЕТ $name"
+        Write-Host "MISSING $name"
         $missing += $name
     }
 }
 
 if ($missing.Count -gt 0) {
     Write-Host ""
-    Write-Host "Не хватает: $($missing -join ', ')"
-    Write-Host "Скачайте community suite / ipatool и положите exe в:"
-    Write-Host "  $tools"
+    Write-Host "Missing: $($missing -join ', ')"
+    Write-SetupHints
     exit 1
 }
 
-Write-Host "Все CLI на месте."
+Write-Host "All CLI tools present."
+
+$amds = Get-Service -Name 'Apple Mobile Device Service' -ErrorAction SilentlyContinue
+if ($null -eq $amds) {
+    Write-Host "Warning: Apple Mobile Device Service not found."
+    Write-Host "Install: winget install --id Apple.AppleMobileDeviceSupport -e"
+} elseif ($amds.Status -ne 'Running') {
+    Write-Host "Warning: Apple Mobile Device Service status=$($amds.Status) (expected Running)."
+} else {
+    Write-Host "OK  Apple Mobile Device Service"
+}
+
 exit 0
