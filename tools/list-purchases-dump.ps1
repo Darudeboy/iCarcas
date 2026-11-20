@@ -1,5 +1,9 @@
-# Interactive dump of ALL ipatool purchases into packages/purchases-dump.json.
-# Passphrase is typed in this console only (not stored).
+# Dump of ALL ipatool purchases into packages/purchases-dump.json.
+# Passphrase: typed interactively, or -Passphrase / env IPATOOL_KC_PASS from iCarcas.
+
+param(
+    [string]$Passphrase = ''
+)
 
 $ErrorActionPreference = 'Stop'
 $ipatool = Join-Path $PSScriptRoot 'libimobiledevice\ipatool.exe'
@@ -8,7 +12,11 @@ if (-not (Test-Path $ipatool)) {
     exit 1
 }
 
-$pass = Read-Host 'Keychain passphrase (NOT Apple ID password)'
+if (-not $Passphrase) { $Passphrase = $env:IPATOOL_KC_PASS }
+$pass = $Passphrase
+if ([string]::IsNullOrWhiteSpace($pass)) {
+    $pass = Read-Host 'Keychain passphrase (NOT Apple ID password)'
+}
 if ([string]::IsNullOrWhiteSpace($pass)) {
     Write-Host 'Empty passphrase, abort.'
     exit 1

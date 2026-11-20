@@ -24,6 +24,7 @@ from ios_restore.domain.models import (
     PackageInfo,
     PurchasedApp,
 )
+from ios_restore.infrastructure import keychain_passphrase as kc_pass
 from ios_restore.infrastructure.package_inspector import PackageInspector
 from ios_restore.infrastructure.paths import default_tools_dir, resolve_tool
 from ios_restore.infrastructure.process_runner import ProcessRunner
@@ -40,6 +41,7 @@ class AppStoreCliAdapter:
         self._tools_dir = tools_dir or default_tools_dir()
         self._inspector = inspector or PackageInspector()
         self._runner = ProcessRunner()
+        self._active_proc: subprocess.Popen[str] | None = None
 
     def _ipatool(self) -> Path:
         path = resolve_tool("ipatool", self._tools_dir)
@@ -81,14 +83,51 @@ class AppStoreCliAdapter:
         self._open_console(["auth", "login"])
 
     def begin_interactive_auth_info(self) -> None:
-        # Banner first so it is not confused with auth login.
         self._open_console_with_banner(
             ["auth", "info"],
             banner=(
-                "AUTH INFO ONLY: when asked, enter Keychain passphrase "
-                "(NOT Apple ID password, NO 2FA)."
+                "ТОЛЬКО ПРОВЕРКА СЕССИИ: введите Keychain passphrase "
+                "(НЕ пароль Apple ID, без 2FA)."
             ),
         )
+
+    def auth_info(self) -> dict[str, str]:
+        """Headless auth info when passphrase is stored; else raise."""
+        passphrase = kc_pass.load_passphrase()
+        if not passphrase:
+            raise RestoreError(
+                ErrorCode.AUTHENTICATION_FAILED,
+                "Нет сохранённого Keychain passphrase. "
+                "Сохраните его в настройках или нажмите «Проверить сессию…».",
+            )
+        ipatool = self._ipatool()
+        result = self._runner.run(
+            [
+                str(ipatool),
+                "--non-interactive",
+                "--keychain-passphrase",
+                passphrase,
+                "--format",
+                "json",
+                "auth",
+                "info",
+            ],
+            timeout=60.0,
+            cwd=str(self._tools_dir),
+            check=False,
+        )
+        blob = self._parse_json_blob(result.stdout) or self._parse_json_blob(result.stderr)
+        if not isinstance(blob, dict):
+            raise RestoreError(
+                ErrorCode.AUTHENTICATION_FAILED,
+                "Не удалось прочитать auth info.",
+                details=(result.stdout or result.stderr)[:500],
+            )
+        out: dict[str, str] = {}
+        for key in ("email", "name", "storefront", "success"):
+            if key in blob and blob[key] is not None:
+                out[key] = str(blob[key])
+        return out
 
     def _open_console_with_banner(self, ipatool_args: list[str], *, banner: str) -> None:
         ipatool = self._ipatool()
@@ -146,22 +185,177 @@ class AppStoreCliAdapter:
             # Only obtains a license in the *current* storefront when available.
             args.append("--purchase")
         version_note = (
-            f" external-version-id={external_version_id}."
+            f" Версия external-version-id={external_version_id}."
             if external_version_id
-            else " latest available version."
+            else " Последняя доступная версия."
         )
         banner = (
-            "DOWNLOAD: enter Keychain passphrase when asked "
-            "(NOT Apple ID password)."
+            "ЗАГРУЗКА IPA: введите Keychain passphrase "
+            "(НЕ пароль Apple ID)."
             + version_note
             + (
-                " Flag --purchase enabled: tries current-storefront license only."
+                " Флаг --purchase: лицензия только в текущем регионе витрины."
                 if try_purchase
-                else " Needs an existing license on this Apple ID."
+                else " Нужна уже существующая лицензия на этом Apple ID."
             )
         )
+        # Prefer headless download with retries when passphrase is stored.
+        if kc_pass.load_passphrase():
+            return self.begin_headless_download(
+                app,
+                destination_dir,
+                try_purchase=try_purchase,
+                external_version_id=external_version_id,
+            )
         self._open_console_with_banner(args, banner=banner)
         return dest
+
+    def download_result_path(self, destination_dir: str | Path) -> Path:
+        return Path(destination_dir) / "download-result.json"
+
+    def begin_headless_download(
+        self,
+        app: AppReference,
+        destination_dir: str,
+        *,
+        try_purchase: bool = False,
+        external_version_id: str | None = None,
+        max_attempts: int = 5,
+    ) -> Path:
+        """Run tools/download-one.ps1 with stored passphrase and retries."""
+        passphrase = kc_pass.load_passphrase()
+        if not passphrase:
+            raise RestoreError(
+                ErrorCode.AUTHENTICATION_FAILED,
+                "Нет сохранённого Keychain passphrase для фоновой загрузки.",
+            )
+        dest = Path(destination_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        script = self._resolve_tools_script("download-one.ps1")
+        result_path = self.download_result_path(dest)
+        if result_path.is_file():
+            result_path.unlink()
+        ps_args = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-OutDir",
+            str(dest),
+            "-MaxAttempts",
+            str(max_attempts),
+        ]
+        if app.bundle_id:
+            ps_args.extend(["-BundleId", app.bundle_id])
+        elif app.store_id:
+            ps_args.extend(["-AppId", app.store_id])
+        else:
+            raise RestoreError(
+                ErrorCode.APP_UNAVAILABLE,
+                "Нужен bundle_id или store_id приложения.",
+            )
+        if external_version_id:
+            ps_args.extend(["-ExternalVersionId", external_version_id])
+        if try_purchase:
+            ps_args.append("-TryPurchase")
+        import os
+
+        env = {**os.environ, "IPATOOL_KC_PASS": passphrase}
+        logger.info(
+            "Starting headless download script app=%s attempts=%s",
+            app.store_id or app.bundle_id,
+            max_attempts,
+        )
+        try:
+            self._active_proc = subprocess.Popen(  # noqa: S603
+                ps_args,
+                cwd=str(script.parent),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,  # type: ignore[attr-defined]
+            )
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось запустить download-one.ps1.",
+                details=str(exc),
+            ) from exc
+        return dest
+
+    def cancel_active_process(self) -> bool:
+        proc = self._active_proc
+        if proc is None or proc.poll() is not None:
+            self._active_proc = None
+            return False
+        try:
+            proc.terminate()
+        except OSError:
+            return False
+        self._active_proc = None
+        return True
+
+    def active_process_running(self) -> bool:
+        proc = self._active_proc
+        if proc is None:
+            return False
+        if proc.poll() is None:
+            return True
+        self._active_proc = None
+        return False
+
+    def read_download_result(self, destination_dir: str | Path) -> dict | None:
+        path = self.download_result_path(destination_dir)
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def begin_script_with_passphrase(
+        self,
+        script_name: str,
+        extra_args: list[str] | None = None,
+        *,
+        cwd: Path | None = None,
+    ) -> None:
+        """Launch a tools/*.ps1 with IPATOOL_KC_PASS if stored, else interactive console."""
+        script = self._resolve_tools_script(script_name)
+        passphrase = kc_pass.load_passphrase()
+        args = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            *(extra_args or []),
+        ]
+        env = None
+        if passphrase:
+            import os
+
+            env = {**os.environ, "IPATOOL_KC_PASS": passphrase}
+        if sys.platform != "win32":
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Скрипты ipatool сейчас поддерживаются на Windows.",
+            )
+        try:
+            self._active_proc = subprocess.Popen(  # noqa: S603
+                ["cmd.exe", "/k", subprocess.list2cmdline(args) + " & echo. & pause"],
+                cwd=str(cwd or script.parent),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+            )
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                f"Не удалось запустить {script_name}.",
+                details=str(exc),
+            ) from exc
 
     def versions_dump_path(self, destination_dir: str | Path, store_id: str) -> Path:
         return Path(destination_dir) / f"versions-{store_id}.json"
@@ -194,31 +388,11 @@ class AppStoreCliAdapter:
             )
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        script = self._resolve_tools_script("list-versions-dump.ps1")
         out_path = self.versions_dump_path(dest, sid)
-        if sys.platform != "win32":
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Интерактивный дамп версий сейчас поддерживается на Windows.",
-            )
-        cmdline = (
-            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
-            f'-AppId {sid} -EnrichLimit {int(enrich_limit)} '
-            f"& echo. & echo Dump path: {out_path} & pause"
+        self.begin_script_with_passphrase(
+            "list-versions-dump.ps1",
+            ["-AppId", sid, "-EnrichLimit", str(int(enrich_limit))],
         )
-        logger.info("Opening interactive versions dump: %s app=%s", script, sid)
-        try:
-            subprocess.Popen(  # noqa: S603
-                ["cmd.exe", "/k", cmdline],
-                cwd=str(script.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
-            )
-        except OSError as exc:
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Не удалось открыть окно дампа версий.",
-                details=str(exc),
-            ) from exc
         return out_path
 
     def load_versions_dump(self, path: str | Path) -> list[AppVersionInfo]:
@@ -312,76 +486,24 @@ class AppStoreCliAdapter:
             )
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        script = self._resolve_tools_script("bulk-download.ps1")
         ids_file = dest / "bulk-ids.txt"
         ids_file.write_text("\n".join(unique) + "\n", encoding="utf-8")
-        if sys.platform != "win32":
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Массовая загрузка сейчас поддерживается на Windows.",
-            )
-        purchase_flag = " -TryPurchase" if try_purchase else ""
-        cmdline = (
-            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
-            f'-IdsFile "{ids_file}"{purchase_flag} '
-            f"& echo. & echo IDs: {ids_file} & pause"
-        )
-        logger.info("Opening bulk download: %s count=%s", script, len(unique))
-        try:
-            subprocess.Popen(  # noqa: S603
-                ["cmd.exe", "/k", cmdline],
-                cwd=str(script.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
-            )
-        except OSError as exc:
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Не удалось открыть окно массовой загрузки.",
-                details=str(exc),
-            ) from exc
+        extra = ["-IdsFile", str(ids_file)]
+        if try_purchase:
+            extra.append("-TryPurchase")
+        logger.info("Opening bulk download count=%s", len(unique))
+        self.begin_script_with_passphrase("bulk-download.ps1", extra)
         return dest
 
     def purchases_dump_path(self, destination_dir: str | Path) -> Path:
         return Path(destination_dir) / "purchases-dump.json"
 
     def begin_interactive_list_purchases(self, destination_dir: str | Path) -> Path:
-        """Open PowerShell dump script (passphrase in console, paginated JSON)."""
+        """Open PowerShell dump script (stored passphrase or interactive prompt)."""
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        script = self._tools_dir.parent / "list-purchases-dump.ps1"
-        if not script.is_file():
-            # tools/ is often .../tools/libimobiledevice; script lives in tools/
-            script = self._tools_dir / "list-purchases-dump.ps1"
-        if not script.is_file():
-            raise RestoreError(
-                ErrorCode.TOOL_NOT_FOUND,
-                "Не найден tools/list-purchases-dump.ps1",
-                details=str(script),
-            )
         out_path = self.purchases_dump_path(dest)
-        if sys.platform != "win32":
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Интерактивный дамп покупок сейчас поддерживается на Windows.",
-            )
-        # Ensure packages dir exists for the script's relative resolution.
-        cmdline = (
-            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
-            f"& echo. & echo Dump path: {out_path} & pause"
-        )
-        logger.info("Opening interactive purchases dump: %s", script)
-        try:
-            subprocess.Popen(  # noqa: S603
-                ["cmd.exe", "/k", cmdline],
-                cwd=str(script.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
-            )
-        except OSError as exc:
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Не удалось открыть окно дампа покупок.",
-                details=str(exc),
-            ) from exc
+        self.begin_script_with_passphrase("list-purchases-dump.ps1")
         return out_path
 
     def load_purchases_dump(self, path: str | Path) -> list[PurchasedApp]:
@@ -472,10 +594,21 @@ class AppStoreCliAdapter:
     def explain_download_failure(text: str) -> str:
         """User-facing hint for common ipatool download failures."""
         low = (text or "").lower()
+        if "504" in low or "gateway timeout" in low:
+            return (
+                "Apple вернула HTTP 504 (таймаут витрины). "
+                "Это сбой на стороне Store — повторите через минуту. "
+                "При сохранённом passphrase iCarcas сам делает несколько попыток."
+            )
+        if "timeout" in low or "timed out" in low or "winhttp" in low:
+            return (
+                "Сеть/таймаут при обращении к Apple. "
+                "Проверьте интернет/VPN и повторите — ретраи включены в фоновой загрузке."
+            )
         if "license" in low or "licence" in low:
             return (
                 "На этом Apple ID нет лицензии на приложение. "
-                "Региональный поиск только находит ID — скачать можно лишь то, "
+                "Поиск ID только находит номер — скачать можно лишь то, "
                 "что уже покупали/скачивали на этот аккаунт. "
                 "Флаг «получить лицензию» работает только если приложение "
                 "доступно в текущем регионе витрины."
@@ -483,7 +616,7 @@ class AppStoreCliAdapter:
         if "password" in low or "passphrase" in low or "keychain" in low or "keyring" in low:
             return (
                 "Проблема с Keychain passphrase / сессией. "
-                "Снова нажмите «Войти…» или введите passphrase в консоли."
+                "Сохраните passphrase заново или введите его в консоли."
             )
         if "login" in low or "auth" in low or "unauthor" in low or "session" in low:
             return "Сессия App Store неактивна. Сначала «Войти…»."

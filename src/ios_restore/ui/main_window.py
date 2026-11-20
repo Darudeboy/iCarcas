@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThreadPool
+from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -13,9 +13,11 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ios_restore.application.diagnostics_service import DiagnosticsService
 from ios_restore.application.regional_search_service import RegionalAppSearchService
 from ios_restore.application.smart_search_service import SmartAppSearchService
 from ios_restore.domain.models import (
@@ -42,6 +45,7 @@ from ios_restore.domain.models import (
     PurchasedApp,
 )
 from ios_restore.domain.version_compare import device_meets_minimum
+from ios_restore.infrastructure import keychain_passphrase as kc_pass
 from ios_restore.infrastructure.apps_catalog import filter_catalog, load_apps_catalog
 from ios_restore.infrastructure.appstore_cli_adapter import AppStoreCliAdapter
 from ios_restore.infrastructure.device_cli_adapter import DeviceCliAdapter
@@ -49,7 +53,9 @@ from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAda
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
+from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
 from ios_restore.ui.workers import (
+    AuthInfoWorker,
     DetectDevicesWorker,
     InstallAppWorker,
     PairDeviceWorker,
@@ -350,10 +356,17 @@ class MainWindow(QMainWindow):
             "App Store",
             step=2,
             hint=(
-                "Пароль, 2FA и Keychain passphrase вводятся в консоли ipatool — "
-                "она откроется сама."
+                "Пароль Apple ID и 2FA — только в консоли ipatool. "
+                "Keychain passphrase можно сохранить на этом ПК (DPAPI)."
             ),
         )
+        limits = QLabel(
+            "Ограничения: только свой Apple ID и свои лицензии. "
+            "Поиск ID ≠ лицензия. DRM/пиратство не поддерживаются."
+        )
+        limits.setWordWrap(True)
+        limits.setObjectName("appSubtitle")
+        self.card_store.body.addWidget(limits)
         row = QHBoxLayout()
         row.setSpacing(10)
         self.login_button = make_button("Войти…")
@@ -370,11 +383,29 @@ class MainWindow(QMainWindow):
         row.addWidget(self.logout_button, 1)
         self.card_store.body.addLayout(row)
 
+        pass_row = QHBoxLayout()
+        pass_row.setSpacing(10)
+        self.remember_pass_button = make_button("Сохранить passphrase…")
+        self.remember_pass_button.setToolTip(
+            "Сохранить Keychain passphrase на этом ПК (Windows DPAPI). "
+            "Не путать с паролем Apple ID."
+        )
+        self.remember_pass_button.clicked.connect(self._on_save_passphrase)
+        self.clear_pass_button = make_button("Забыть passphrase", "ghost")
+        self.clear_pass_button.clicked.connect(self._on_clear_passphrase)
+        pass_row.addWidget(self.remember_pass_button, 1)
+        pass_row.addWidget(self.clear_pass_button, 1)
+        self.card_store.body.addLayout(pass_row)
+        self.passphrase_chip = QLabel()
+        self.passphrase_chip.setObjectName("appSubtitle")
+        self._refresh_passphrase_label()
+        self.card_store.body.addWidget(self.passphrase_chip)
+
         archive_row = QHBoxLayout()
         archive_row.setSpacing(10)
         self.archive_button = make_button("Архив покупок…")
         self.archive_button.setToolTip(
-            "Открывает консоль: passphrase → полный дамп покупок текущего Apple ID"
+            "Дамп покупок текущего Apple ID (сохранённый passphrase или ввод в консоли)"
         )
         self.archive_button.clicked.connect(self._on_archive_purchases)
         self.pickup_archive_button = make_button("Подхватить архив")
@@ -455,6 +486,16 @@ class MainWindow(QMainWindow):
         versions_row.addWidget(self.pickup_versions_button, 1)
         versions_row.addWidget(self.catalog_button, 1)
         self.card_app.body.addLayout(versions_row)
+        dl_ctrl = QHBoxLayout()
+        dl_ctrl.setSpacing(10)
+        self.cancel_download_button = make_button("Отменить загрузку", "danger")
+        self.cancel_download_button.setEnabled(False)
+        self.cancel_download_button.clicked.connect(self._on_cancel_download)
+        self.diag_button = make_button("Диагностика…", "ghost")
+        self.diag_button.clicked.connect(self._on_export_diagnostics)
+        dl_ctrl.addWidget(self.cancel_download_button, 1)
+        dl_ctrl.addWidget(self.diag_button, 1)
+        self.card_app.body.addLayout(dl_ctrl)
         self.install_button = make_button("Установить на iPhone", "primary")
         self.install_button.setEnabled(False)
         self.install_button.clicked.connect(self._on_install)
@@ -462,6 +503,8 @@ class MainWindow(QMainWindow):
         root.addWidget(self.card_app)
         self._versions_dump_path: Path | None = None
         self._catalog_cache: list[CatalogApp] | None = None
+        self._download_poll: QTimer | None = None
+        self._session_label: str | None = None
 
         log_card = Card("Журнал")
         self.btn_clear_log = make_button("Очистить", "ghost")
@@ -479,6 +522,7 @@ class MainWindow(QMainWindow):
         self._append_env_status()
         session_ok = self._appstore.session_files_present()
         self.set_session_chip(session_ok)
+        QTimer.singleShot(0, self._bootstrap_tos_and_session)
 
     def _refresh_title(self) -> None:
         accent = PALETTES[self._mode]["accent"]
@@ -523,11 +567,16 @@ class MainWindow(QMainWindow):
         if found:
             self.card_store.set_state("active")
 
-    def set_session_chip(self, ok: bool) -> None:
-        self.chip_session.set_state(
-            ok,
-            "Сессия App Store активна" if ok else "Нет сессии App Store",
+    def set_session_chip(self, ok: bool, detail: str | None = None) -> None:
+        if detail:
+            self._session_label = detail
+        label = self._session_label or (
+            "Сессия App Store активна" if ok else "Нет сессии App Store"
         )
+        if not ok:
+            self._session_label = None
+            label = "Нет сессии App Store"
+        self.chip_session.set_state(ok, label)
         self.card_store.set_state(
             "done" if ok else "active",
             "Готово" if ok else "",
@@ -536,6 +585,168 @@ class MainWindow(QMainWindow):
             self.card_app.set_state("active")
         self.archive_button.setEnabled(ok)
         self.pickup_archive_button.setEnabled(ok)
+
+    def _bootstrap_tos_and_session(self) -> None:
+        if not ensure_tos_accepted(self):
+            QMessageBox.information(
+                self,
+                "iCarcas",
+                "Без принятия условий download/install недоступны.",
+            )
+        self._refresh_passphrase_label()
+        if self._appstore.session_files_present() and kc_pass.has_stored_passphrase():
+            worker = AuthInfoWorker(self._appstore)
+            worker.signals.finished.connect(self._on_auth_info_done)
+            worker.signals.failed.connect(lambda _m: None)
+            self._thread_pool.start(worker)
+
+    def _require_tos(self) -> bool:
+        if tos_accepted():
+            return True
+        return ensure_tos_accepted(self)
+
+    def _refresh_passphrase_label(self) -> None:
+        if kc_pass.has_stored_passphrase():
+            self.passphrase_chip.setText(
+                "Keychain passphrase: сохранён на этом ПК (фоновые загрузки с ретраями)."
+            )
+        else:
+            self.passphrase_chip.setText(
+                "Keychain passphrase: не сохранён — каждый шаг спросит в консоли."
+            )
+
+    def _on_save_passphrase(self) -> None:
+        if not self._require_tos():
+            return
+        text, ok = QInputDialog.getText(
+            self,
+            "Keychain passphrase",
+            "Введите Keychain passphrase ipatool\n"
+            "(НЕ пароль Apple ID). Будет сохранён через Windows DPAPI:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not text.strip():
+            return
+        try:
+            kc_pass.save_passphrase(text.strip())
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Passphrase", str(exc))
+            return
+        self._refresh_passphrase_label()
+        QMessageBox.information(
+            self,
+            "Passphrase",
+            "Сохранено. Download/архив/версии смогут идти с ретраями без повторного ввода.",
+        )
+
+    def _on_clear_passphrase(self) -> None:
+        kc_pass.clear_passphrase()
+        self._refresh_passphrase_label()
+        self.output.appendPlainText("Сохранённый Keychain passphrase удалён.")
+
+    def _on_cancel_download(self) -> None:
+        if self._appstore.cancel_active_process():
+            self.cancel_download_button.setEnabled(False)
+            self._stop_download_poll()
+            self.output.appendPlainText("Загрузка отменена.")
+        else:
+            QMessageBox.information(self, "Отмена", "Активной загрузки нет.")
+
+    def _on_export_diagnostics(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить диагностику",
+            str(Path.cwd() / "icarcas-diagnostics.zip"),
+            "ZIP (*.zip)",
+        )
+        if not path:
+            return
+        devices = [
+            {
+                "device_id": d.device_id,
+                "display_name": d.display_name,
+                "os_version": d.os_version,
+                "available_for_operations": d.available_for_operations,
+            }
+            for d in self._devices
+        ]
+        svc = DiagnosticsService(
+            packages_dir=self._packages_dir,
+            session_present=self._appstore.session_files_present(),
+            devices=devices,
+            log_text=self.output.toPlainText(),
+        )
+        try:
+            out = svc.build_zip(Path(path))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Диагностика", str(exc))
+            return
+        QMessageBox.information(self, "Диагностика", f"Сохранено:\n{out}")
+
+    def _on_auth_info_done(self, info: object) -> None:
+        assert isinstance(info, dict)
+        email = str(info.get("email") or "")
+        storefront = str(info.get("storefront") or "")
+        detail = "Сессия OK"
+        if email:
+            detail = email
+        if storefront:
+            detail = f"{detail} · {storefront}"
+        self.set_session_chip(True, detail)
+        self.output.appendPlainText(
+            "auth info: " + ", ".join(f"{k}={v}" for k, v in info.items())
+        )
+        self._set_busy(False)
+
+    def _start_download_poll(self) -> None:
+        self._stop_download_poll()
+        self.cancel_download_button.setEnabled(True)
+        timer = QTimer(self)
+        timer.setInterval(1500)
+        timer.timeout.connect(self._poll_download_result)
+        self._download_poll = timer
+        timer.start()
+
+    def _stop_download_poll(self) -> None:
+        if self._download_poll is not None:
+            self._download_poll.stop()
+            self._download_poll.deleteLater()
+            self._download_poll = None
+        self.cancel_download_button.setEnabled(False)
+
+    def _poll_download_result(self) -> None:
+        result = self._appstore.read_download_result(self._packages_dir)
+        running = self._appstore.active_process_running()
+        if result is None:
+            if not running:
+                # Interactive console mode — no result file yet.
+                self._stop_download_poll()
+            else:
+                self.output.setPlainText(
+                    "Фоновая загрузка… ретраи при HTTP 504/таймауте.\n"
+                    "Можно «Отменить загрузку»."
+                )
+            return
+        self._stop_download_poll()
+        if result.get("success"):
+            before = getattr(self, "_download_before_names", set())
+            package = self._appstore.wait_for_new_ipa(
+                self._packages_dir,
+                before_names=before,
+                timeout_sec=2.0,
+            )
+            if package is not None:
+                self._on_download_done(package)
+                return
+            self.output.setPlainText(
+                "Download success, но IPA не найден в packages. "
+                "Нажмите «Подхватить IPA»."
+            )
+            return
+        err = str(result.get("error") or "download failed")
+        hint = AppStoreCliAdapter.explain_download_failure(err)
+        self.output.setPlainText(f"Загрузка не удалась.\n{hint}\n\n{err[:1500]}")
+        QMessageBox.warning(self, "Загрузка", hint)
 
     def _append_env_status(self) -> None:
         try:
@@ -585,6 +796,8 @@ class MainWindow(QMainWindow):
         self._thread_pool.start(worker)
 
     def _on_login(self) -> None:
+        if not self._require_tos():
+            return
         try:
             self._appstore.begin_interactive_login()
         except Exception as exc:  # noqa: BLE001
@@ -595,13 +808,21 @@ class MainWindow(QMainWindow):
             "Авторизация",
             "Открыта консоль ipatool auth login.\n"
             "Введите Apple ID, пароль, Keychain passphrase и 2FA там.\n"
-            "Дождитесь success=true.",
+            "Дождитесь success=true.\n\n"
+            "Затем можно «Сохранить passphrase…» для фоновых загрузок.",
         )
         self.output.setPlainText(
             "Ожидание login в консоли… После success нажмите «Проверить сессию…»."
         )
 
     def _on_auth_info(self) -> None:
+        if kc_pass.has_stored_passphrase():
+            self._set_busy(True, "Читаю auth info…")
+            worker = AuthInfoWorker(self._appstore)
+            worker.signals.finished.connect(self._on_auth_info_done)
+            worker.signals.failed.connect(self._on_worker_failed)
+            self._thread_pool.start(worker)
+            return
         try:
             self._appstore.begin_interactive_auth_info()
         except Exception as exc:  # noqa: BLE001
@@ -611,15 +832,14 @@ class MainWindow(QMainWindow):
             self,
             "Проверка сессии",
             "В консоли ipatool спросит Keychain passphrase "
-            "(тот же локальный, что при login — не пароль Apple ID).\n"
-            "Если увидите email/name и success — сессия активна.",
+            "(НЕ пароль Apple ID).\n"
+            "Или сохраните passphrase кнопкой выше — тогда проверка будет без консоли.",
         )
         present = self._appstore.session_files_present()
         self.set_session_chip(present)
         self.output.setPlainText(
             "Открыта консоль auth info.\n"
-            f"Локальные файлы сессии: {'да' if present else 'нет'}.\n"
-            "Введите passphrase в консоли и смотрите success/email."
+            f"Локальные файлы сессии: {'да' if present else 'нет'}."
         )
 
     def _on_logout(self) -> None:
@@ -644,6 +864,8 @@ class MainWindow(QMainWindow):
     def _on_archive_purchases(self) -> None:
         if self._busy:
             return
+        if not self._require_tos():
+            return
         if not self._appstore.session_files_present():
             QMessageBox.information(
                 self,
@@ -652,11 +874,16 @@ class MainWindow(QMainWindow):
                 "чтобы ipatool видел покупки этого Apple ID.",
             )
             return
+        pass_note = (
+            "Будет использован сохранённый passphrase."
+            if kc_pass.has_stored_passphrase()
+            else "В консоли введите Keychain passphrase."
+        )
         answer = QMessageBox.question(
             self,
             "Архив покупок",
-            "Открыть консоль дампа покупок?\n\n"
-            "В консоли введите Keychain passphrase.\n"
+            "Открыть дамп покупок?\n\n"
+            f"{pass_note}\n"
             f"Результат: {self._purchases_dump_path}\n\n"
             "После DONE нажмите «Подхватить архив».",
         )
@@ -975,6 +1202,8 @@ class MainWindow(QMainWindow):
         confirm: bool,
         external_version_id: str | None = None,
     ) -> None:
+        if not self._require_tos():
+            return
         try_purchase = self.try_purchase_check.isChecked()
         target = app.bundle_id or app.store_id or "?"
         version_line = (
@@ -982,16 +1211,20 @@ class MainWindow(QMainWindow):
             if external_version_id
             else "версия: latest\n"
         )
+        headless = kc_pass.has_stored_passphrase()
+        mode_line = (
+            "Режим: фоновая загрузка с ретраями (сохранённый passphrase).\n"
+            if headless
+            else "Режим: консоль ipatool (введите passphrase вручную).\n"
+        )
         msg = (
-            "Открыть консоль ipatool download?\n"
+            "Начать download IPA?\n"
             f"{target}\n"
             f"{version_line}"
+            f"{mode_line}"
             f"Каталог: {self._packages_dir}\n"
             f"--purchase: {'да (текущий storefront)' if try_purchase else 'нет'}\n\n"
-            "Нужна лицензия на текущем Apple ID. "
-            "Поиск ID в другом регионе сам по себе лицензию не даёт.\n\n"
-            "В консоли введите Keychain passphrase. "
-            "После success — «Подхватить IPA»."
+            "Нужна лицензия на текущем Apple ID."
         )
         if confirm:
             answer = QMessageBox.question(self, "Загрузка", msg)
@@ -1011,19 +1244,21 @@ class MainWindow(QMainWindow):
             return
         self._download_before_names = before
         self.card_app.set_state("active", "Загрузка…")
-        self.output.setPlainText(
-            "Консоль download открыта.\n"
-            "1) Введите Keychain passphrase в консоли\n"
-            "2) Дождитесь success / DONE\n"
-            "3) Нажмите «Подхватить IPA»\n\n"
-            + (
-                f"external-version-id={external_version_id}\n\n"
-                if external_version_id
-                else ""
+        if headless:
+            self.output.setPlainText(
+                "Фоновая загрузка запущена (ретраи при HTTP 504).\n"
+                "Дождитесь авто-подхвата или нажмите «Отменить загрузку».\n"
+                + AppStoreCliAdapter.explain_download_failure("license")
             )
-            + "Если в консоли license is required:\n"
-            + AppStoreCliAdapter.explain_download_failure("license")
-        )
+            self._start_download_poll()
+        else:
+            self.output.setPlainText(
+                "Консоль download открыта.\n"
+                "1) Keychain passphrase\n"
+                "2) success / DONE\n"
+                "3) «Подхватить IPA»\n\n"
+                + AppStoreCliAdapter.explain_download_failure("license")
+            )
 
     def _on_list_versions(self) -> None:
         raw = self.app_input.text().strip()
@@ -1304,6 +1539,8 @@ class MainWindow(QMainWindow):
             self._start_download(AppReference(store_id=app.store_id), confirm=True)
 
         def on_bulk() -> None:
+            if not self._require_tos():
+                return
             selected = _selected()
             if not selected:
                 QMessageBox.information(
@@ -1367,6 +1604,8 @@ class MainWindow(QMainWindow):
 
     def _on_install(self) -> None:
         if self._busy or self._package is None:
+            return
+        if not self._require_tos():
             return
         if not self._devices:
             QMessageBox.information(self, "Установка", "Сначала найдите устройство.")
@@ -1515,6 +1754,9 @@ class MainWindow(QMainWindow):
             self.archive_button,
             self.pickup_archive_button,
             self.regional_search_button,
+            self.remember_pass_button,
+            self.clear_pass_button,
+            self.diag_button,
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)

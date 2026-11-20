@@ -8,7 +8,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$AppId,
-    [int]$EnrichLimit = 40
+    [int]$EnrichLimit = 40,
+    [string]$Passphrase = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +24,11 @@ if ($AppId -notmatch '^\d+$') {
     exit 1
 }
 
-$pass = Read-Host 'Keychain passphrase (NOT Apple ID password)'
+if (-not $Passphrase) { $Passphrase = $env:IPATOOL_KC_PASS }
+$pass = $Passphrase
+if ([string]::IsNullOrWhiteSpace($pass)) {
+    $pass = Read-Host 'Keychain passphrase (NOT Apple ID password)'
+}
 if ([string]::IsNullOrWhiteSpace($pass)) {
     Write-Host 'Empty passphrase, abort.'
     exit 1

@@ -3,9 +3,15 @@
 Локальная настольная утилита для Windows: загрузка оригинальных App Store-пакетов, доступных вашему Apple ID, и установка на ваш iPhone.
 
 ```powershell
-python -m ios_restore          # тёмная тема (или сохранённая)
+.\scripts\run-icarcas.ps1          # venv + проверки CLI + запуск
+.\scripts\run-icarcas.ps1 -Light
+# или:
+python -m ios_restore              # тёмная тема (или сохранённая)
 python -m ios_restore --light
 ```
+
+Личный portable: `.\scripts\check-tools.ps1` проверяет `tools\libimobiledevice\*.exe`.  
+Откат к бэкапу перед prod-срезом: `git checkout backup/pre-prod-2026-11-20`.
 
 ## Требования
 
@@ -50,10 +56,18 @@ python -m ios_restore
 
 См. [docs/capability_matrix.md](docs/capability_matrix.md).
 
+## Personal prod (этот ПК)
+
+- **ToS** при первом запуске — без принятия download/install закрыты.
+- **Сохранить passphrase** (DPAPI) → фоновый download с ретраями на HTTP 504.
+- **Диагностика…** → zip без паролей/IPA/cookies.
+- Откат: тег `backup/pre-prod-2026-11-20`.
+
 ## Ограничения (честно)
 
 - Установка FairPlay IPA на не-jailbroken iPhone через `ideviceinstaller` — **assumed**, не гарантия запуска.
 - Обход DRM, re-sign и jailbreak не реализуются.
+- Сохранённый passphrase живёт только на этом Windows-пользователе (DPAPI).
 
 ## Документация
 

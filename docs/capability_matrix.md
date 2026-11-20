@@ -50,6 +50,11 @@
 | UI: выбор версии (`list-versions` + `external-version-id`) | `verified_documentation` | `tools/list-versions-dump.ps1` → диалог → download |
 | UI: каталог Store ID + массовая загрузка | `verified_documentation` | `data/apps_catalog.txt` + `tools/bulk-download.ps1` |
 | Проверка min iOS перед install | `verified_locally` | Сравнение `MinimumOSVersion` IPA и `ProductVersion` устройства |
+| DPAPI Keychain passphrase (личный ПК) | `verified_documentation` | `%LOCALAPPDATA%/iCarcas/keychain_passphrase.dpapi` |
+| Download retry на HTTP 504 | `verified_documentation` | `tools/download-one.ps1` |
+| ToS gate | `verified_documentation` | Первый запуск; блокирует download/install |
+| Diagnostics zip (redacted) | `verified_documentation` | Без cookies / passphrase / IPA |
+| Portable scripts | `verified_documentation` | `scripts/run-icarcas.ps1`, `check-tools.ps1` |
 
 ## Устройство: libimobiledevice
 
