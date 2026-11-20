@@ -24,8 +24,9 @@ python -m ios_restore --no-splash  # без анимации слоёв
 
 ## Быстрый старт (mock)
 
+После клонирования репозитория — в корне проекта:
+
 ```powershell
-cd D:\appstore
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
@@ -59,12 +60,12 @@ python -m ios_restore
 
 См. [docs/capability_matrix.md](docs/capability_matrix.md).
 
-## Personal prod (этот ПК)
+## Personal / portable
 
 - **ToS** при первом запуске — без принятия download/install закрыты.
 - **Сохранить passphrase** (DPAPI) → фоновый download с ретраями на HTTP 504.
 - **Диагностика…** → zip без паролей/IPA/cookies.
-- Откат: тег `backup/pre-prod-2026-11-20`.
+- Откат к тегу: `git checkout backup/pre-prod-2026-11-20` (или актуальный `backup/…`).
 
 ## Ограничения (честно)
 
