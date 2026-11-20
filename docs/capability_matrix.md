@@ -43,6 +43,13 @@
 | ipatool 2.8.1 Windows amd64 установлен локально | `verified_locally` | `tools/libimobiledevice/ipatool.exe` |
 | Реальный login / download на этой машине | ожидает пользователя | UI открывает интерактивный `ipatool auth login`; пароль в чат не передаётся |
 | Передача пароля через argv из нашего UI | `unsupported` | Политика: интерактивный механизм инструмента |
+| Кросс-регион: тот же Apple ID, покупки из прошлой страны | `assumed` | `list-purchases` дамп + `download` по app-id; лицензия должна остаться на аккаунте |
+| Кросс-регион: найти ID в чужой витрине (iTunes Search) | `verified_locally` | UI «Найти ID по региону»; ID ≠ лицензия |
+| Скачать app без лицензии на текущем ID | `unsupported` | `license is required`; `--purchase` только для текущего storefront |
+| Интерактивный полный дамп покупок | `verified_documentation` | `tools/list-purchases-dump.ps1` → `packages/purchases-dump.json` |
+| UI: выбор версии (`list-versions` + `external-version-id`) | `verified_documentation` | `tools/list-versions-dump.ps1` → диалог → download |
+| UI: каталог Store ID + массовая загрузка | `verified_documentation` | `data/apps_catalog.txt` + `tools/bulk-download.ps1` |
+| Проверка min iOS перед install | `verified_locally` | Сравнение `MinimumOSVersion` IPA и `ProductVersion` устройства |
 
 ## Устройство: libimobiledevice
 

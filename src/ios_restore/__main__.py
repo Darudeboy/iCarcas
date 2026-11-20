@@ -35,6 +35,20 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("iCarcas")
     app.setOrganizationName("iCarcas")
+    # Fusion даёт предсказуемую стилизацию диалогов в тёмной теме Windows
+    app.setStyle("Fusion")
+    # Светлая палитра приложения — чтобы модальные диалоги были читаемыми
+    from PySide6.QtGui import QColor, QPalette
+    _pal = QPalette()
+    _pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+    _pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+    _pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    _pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+    _pal.setColor(QPalette.ColorRole.Button, QColor("#e0e0e0"))
+    _pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
+    _pal.setColor(QPalette.ColorRole.Highlight, QColor("#0078d7"))
+    _pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    app.setPalette(_pal)
     app.setStyleSheet(build_stylesheet(mode))
     window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
     window.show()

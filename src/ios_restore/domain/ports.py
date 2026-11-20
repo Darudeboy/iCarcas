@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ios_restore.domain.models import AppReference, DeviceInfo, PackageInfo
+from ios_restore.domain.models import AppReference, AppSearchResult, DeviceInfo, PackageInfo, PurchasedApp
 
 
 class EnvironmentPort(Protocol):
@@ -39,6 +39,21 @@ class DownloadPort(Protocol):
 class InstallPort(Protocol):
     def install(self, package: PackageInfo, device: DeviceInfo) -> None:
         ...
+
+
+class PurchasesPort(Protocol):
+    def list_purchases(self) -> list[PurchasedApp]:
+        """Вернуть купленные/доступные приложения с бандлами (ipatool list-purchases)."""
+
+
+class SearchPort(Protocol):
+    def search(self, term: str) -> list[AppSearchResult]:
+        """Поиск приложений в App Store по названию (ipatool search --format json)."""
+
+
+class RegionalSearchPort(Protocol):
+    def search_region(self, term: str, region_code: str) -> list[AppSearchResult]:
+        """Поиск приложений в конкретном регионе App Store (iTunes Search API)."""
 
 
 class PackageInspectorPort(Protocol):

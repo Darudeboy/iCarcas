@@ -93,3 +93,67 @@ class OperationResult:
             f"status={self.status!r}, stage={self.stage!r}, "
             f"error_code={self.error_code!r})"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PurchasedApp:
+    """Одна запись из архива покупок App Store (ipatool list-purchases)."""
+
+    store_id: str | None = None
+    bundle_id: str | None = None
+    display_name: str | None = None
+    version: str | None = None
+    price: str | None = None
+    category: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AppSearchResult:
+    """Результат поиска приложения в App Store (ipatool search или iTunes API)."""
+
+    store_id: str | None = None
+    bundle_id: str | None = None
+    display_name: str | None = None
+    version: str | None = None
+    price: str | None = None
+    category: str | None = None
+    region: str | None = None
+    source: str | None = None  # catalog | itunes | lookup
+    seller_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AppVersionInfo:
+    """Одна доступная версия приложения (ipatool list-versions / metadata)."""
+
+    external_version_id: str
+    display_version: str | None = None
+    release_date: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogApp:
+    """Запись из локального каталога Store ID (Apps_ID_List)."""
+
+    display_name: str
+    store_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AppStoreRegion:
+    """Регион App Store для поиска."""
+
+    code: str
+    name: str
+
+
+KNOWN_REGIONS: tuple[AppStoreRegion, ...] = (
+    AppStoreRegion("US", "США"),
+    AppStoreRegion("RU", "Россия"),
+    AppStoreRegion("GB", "Великобритания"),
+    AppStoreRegion("DE", "Германия"),
+    AppStoreRegion("FR", "Франция"),
+    AppStoreRegion("JP", "Япония"),
+    AppStoreRegion("CA", "Канада"),
+    AppStoreRegion("AU", "Австралия"),
+)

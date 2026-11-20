@@ -17,9 +17,16 @@ import time
 from pathlib import Path
 
 from ios_restore.domain.errors import ErrorCode, RestoreError
-from ios_restore.domain.models import AppReference, PackageInfo
+from ios_restore.domain.models import (
+    AppReference,
+    AppSearchResult,
+    AppVersionInfo,
+    PackageInfo,
+    PurchasedApp,
+)
 from ios_restore.infrastructure.package_inspector import PackageInspector
 from ios_restore.infrastructure.paths import default_tools_dir, resolve_tool
+from ios_restore.infrastructure.process_runner import ProcessRunner
 
 logger = logging.getLogger("ios_restore.appstore")
 
@@ -32,6 +39,7 @@ class AppStoreCliAdapter:
     ) -> None:
         self._tools_dir = tools_dir or default_tools_dir()
         self._inspector = inspector or PackageInspector()
+        self._runner = ProcessRunner()
 
     def _ipatool(self) -> Path:
         path = resolve_tool("ipatool", self._tools_dir)
@@ -112,7 +120,14 @@ class AppStoreCliAdapter:
     def begin_interactive_revoke(self) -> None:
         self._open_console(["auth", "revoke"])
 
-    def begin_interactive_download(self, app: AppReference, destination_dir: str) -> Path:
+    def begin_interactive_download(
+        self,
+        app: AppReference,
+        destination_dir: str,
+        *,
+        try_purchase: bool = False,
+        external_version_id: str | None = None,
+    ) -> Path:
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
         args = ["download", "-o", str(dest)]
@@ -125,8 +140,400 @@ class AppStoreCliAdapter:
                 ErrorCode.APP_UNAVAILABLE,
                 "Нужен bundle_id или store_id приложения.",
             )
-        self._open_console(args)
+        if external_version_id:
+            args.extend(["--external-version-id", external_version_id])
+        if try_purchase:
+            # Only obtains a license in the *current* storefront when available.
+            args.append("--purchase")
+        version_note = (
+            f" external-version-id={external_version_id}."
+            if external_version_id
+            else " latest available version."
+        )
+        banner = (
+            "DOWNLOAD: enter Keychain passphrase when asked "
+            "(NOT Apple ID password)."
+            + version_note
+            + (
+                " Flag --purchase enabled: tries current-storefront license only."
+                if try_purchase
+                else " Needs an existing license on this Apple ID."
+            )
+        )
+        self._open_console_with_banner(args, banner=banner)
         return dest
+
+    def versions_dump_path(self, destination_dir: str | Path, store_id: str) -> Path:
+        return Path(destination_dir) / f"versions-{store_id}.json"
+
+    def _resolve_tools_script(self, name: str) -> Path:
+        script = self._tools_dir.parent / name
+        if not script.is_file():
+            script = self._tools_dir / name
+        if not script.is_file():
+            raise RestoreError(
+                ErrorCode.TOOL_NOT_FOUND,
+                f"Не найден tools/{name}",
+                details=str(script),
+            )
+        return script
+
+    def begin_interactive_list_versions(
+        self,
+        store_id: str,
+        destination_dir: str | Path,
+        *,
+        enrich_limit: int = 40,
+    ) -> Path:
+        """Open PowerShell dump of list-versions (+ metadata for newest N)."""
+        sid = (store_id or "").strip()
+        if not sid.isdigit():
+            raise RestoreError(
+                ErrorCode.APP_UNAVAILABLE,
+                "Для списка версий нужен числовой App Store ID.",
+            )
+        dest = Path(destination_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        script = self._resolve_tools_script("list-versions-dump.ps1")
+        out_path = self.versions_dump_path(dest, sid)
+        if sys.platform != "win32":
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Интерактивный дамп версий сейчас поддерживается на Windows.",
+            )
+        cmdline = (
+            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+            f'-AppId {sid} -EnrichLimit {int(enrich_limit)} '
+            f"& echo. & echo Dump path: {out_path} & pause"
+        )
+        logger.info("Opening interactive versions dump: %s app=%s", script, sid)
+        try:
+            subprocess.Popen(  # noqa: S603
+                ["cmd.exe", "/k", cmdline],
+                cwd=str(script.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+            )
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось открыть окно дампа версий.",
+                details=str(exc),
+            ) from exc
+        return out_path
+
+    def load_versions_dump(self, path: str | Path) -> list[AppVersionInfo]:
+        dump = Path(path)
+        if not dump.is_file():
+            raise RestoreError(
+                ErrorCode.VERSIONS_FETCH_FAILED,
+                f"Файл версий не найден: {dump.name}. "
+                "Сначала завершите дамп в консоли (passphrase → DONE).",
+                details=str(dump),
+            )
+        text = dump.read_text(encoding="utf-8-sig", errors="replace")
+        versions = self._parse_versions(text)
+        if not versions:
+            raise RestoreError(
+                ErrorCode.VERSIONS_FETCH_FAILED,
+                "В дампе версий записей не найдено.",
+                details=str(dump),
+            )
+        return versions
+
+    @staticmethod
+    def _parse_versions(stdout: str) -> list[AppVersionInfo]:
+        text = (stdout or "").strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            blob = AppStoreCliAdapter._parse_json_blob(text)
+            data = blob if blob is not None else {}
+
+        versions: list[AppVersionInfo] = []
+        if isinstance(data, dict):
+            raw_list = data.get("versions")
+            if isinstance(raw_list, list):
+                for item in raw_list:
+                    if not isinstance(item, dict):
+                        continue
+                    vid = item.get("externalVersionId") or item.get(
+                        "externalVersionID"
+                    )
+                    if vid is None:
+                        continue
+                    versions.append(
+                        AppVersionInfo(
+                            external_version_id=str(vid).strip(),
+                            display_version=(
+                                str(item["displayVersion"]).strip()
+                                if item.get("displayVersion")
+                                else None
+                            ),
+                            release_date=(
+                                str(item["releaseDate"]).strip()
+                                if item.get("releaseDate")
+                                else None
+                            ),
+                        )
+                    )
+            if not versions:
+                ids = data.get("externalVersionIdentifiers")
+                if isinstance(ids, list):
+                    for vid in ids:
+                        if vid is None:
+                            continue
+                        versions.append(
+                            AppVersionInfo(external_version_id=str(vid).strip())
+                        )
+        return [v for v in versions if v.external_version_id]
+
+    def begin_interactive_bulk_download(
+        self,
+        store_ids: list[str],
+        destination_dir: str | Path,
+        *,
+        try_purchase: bool = False,
+    ) -> Path:
+        """Open PowerShell bulk download for numeric Store IDs (one passphrase)."""
+        ids = [s.strip() for s in store_ids if str(s).strip().isdigit()]
+        # Preserve order, unique.
+        seen: set[str] = set()
+        unique: list[str] = []
+        for sid in ids:
+            if sid not in seen:
+                seen.add(sid)
+                unique.append(sid)
+        if not unique:
+            raise RestoreError(
+                ErrorCode.APP_UNAVAILABLE,
+                "Нужен хотя бы один числовой App Store ID для массовой загрузки.",
+            )
+        dest = Path(destination_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        script = self._resolve_tools_script("bulk-download.ps1")
+        ids_file = dest / "bulk-ids.txt"
+        ids_file.write_text("\n".join(unique) + "\n", encoding="utf-8")
+        if sys.platform != "win32":
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Массовая загрузка сейчас поддерживается на Windows.",
+            )
+        purchase_flag = " -TryPurchase" if try_purchase else ""
+        cmdline = (
+            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+            f'-IdsFile "{ids_file}"{purchase_flag} '
+            f"& echo. & echo IDs: {ids_file} & pause"
+        )
+        logger.info("Opening bulk download: %s count=%s", script, len(unique))
+        try:
+            subprocess.Popen(  # noqa: S603
+                ["cmd.exe", "/k", cmdline],
+                cwd=str(script.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+            )
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось открыть окно массовой загрузки.",
+                details=str(exc),
+            ) from exc
+        return dest
+
+    def purchases_dump_path(self, destination_dir: str | Path) -> Path:
+        return Path(destination_dir) / "purchases-dump.json"
+
+    def begin_interactive_list_purchases(self, destination_dir: str | Path) -> Path:
+        """Open PowerShell dump script (passphrase in console, paginated JSON)."""
+        dest = Path(destination_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        script = self._tools_dir.parent / "list-purchases-dump.ps1"
+        if not script.is_file():
+            # tools/ is often .../tools/libimobiledevice; script lives in tools/
+            script = self._tools_dir / "list-purchases-dump.ps1"
+        if not script.is_file():
+            raise RestoreError(
+                ErrorCode.TOOL_NOT_FOUND,
+                "Не найден tools/list-purchases-dump.ps1",
+                details=str(script),
+            )
+        out_path = self.purchases_dump_path(dest)
+        if sys.platform != "win32":
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Интерактивный дамп покупок сейчас поддерживается на Windows.",
+            )
+        # Ensure packages dir exists for the script's relative resolution.
+        cmdline = (
+            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+            f"& echo. & echo Dump path: {out_path} & pause"
+        )
+        logger.info("Opening interactive purchases dump: %s", script)
+        try:
+            subprocess.Popen(  # noqa: S603
+                ["cmd.exe", "/k", cmdline],
+                cwd=str(script.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+            )
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось открыть окно дампа покупок.",
+                details=str(exc),
+            ) from exc
+        return out_path
+
+    def load_purchases_dump(self, path: str | Path) -> list[PurchasedApp]:
+        dump = Path(path)
+        if not dump.is_file():
+            raise RestoreError(
+                ErrorCode.PURCHASES_FETCH_FAILED,
+                f"Файл архива не найден: {dump.name}. "
+                "Сначала завершите дамп в консоли (passphrase → DONE).",
+                details=str(dump),
+            )
+        text = dump.read_text(encoding="utf-8-sig", errors="replace")
+        apps = self._parse_purchases(text)
+        if not apps:
+            # jsonl fallback (one object per line)
+            apps = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                apps.extend(self._parse_purchases(line))
+        return apps
+
+    def list_purchases(self) -> list[PurchasedApp]:
+        """Headless list-purchases (often fails on Windows keyring — prefer interactive dump)."""
+        ipatool = self._ipatool()
+        result = self._runner.run(
+            [str(ipatool), "list-purchases", "--format", "json", "-l", "50", "-p", "1"],
+            timeout=180.0,
+            cwd=str(self._tools_dir),
+        )
+        return self._parse_purchases(result.stdout)
+
+    @staticmethod
+    def _parse_purchases(stdout: str) -> list[PurchasedApp]:
+        text = (stdout or "").strip()
+        if not text:
+            return []
+        data: object
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Try last JSON object in noisy console output.
+            blob = AppStoreCliAdapter._parse_json_blob(text)
+            data = blob if blob is not None else []
+
+        items: list[object]
+        if isinstance(data, dict):
+            raw_apps = data.get("apps")
+            if isinstance(raw_apps, list):
+                items = raw_apps
+            else:
+                items = [data]
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+
+        apps: list[PurchasedApp] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            store_raw = item.get("id") or item.get("appId") or item.get("storeId")
+            store_id = str(store_raw).strip() if store_raw is not None else None
+            if store_id == "":
+                store_id = None
+            bundle_id = item.get("bundleID") or item.get("bundleIdentifier")
+            if isinstance(bundle_id, str):
+                bundle_id = bundle_id.strip() or None
+            else:
+                bundle_id = None
+            name = item.get("name") or item.get("title") or item.get("appName")
+            if isinstance(name, str):
+                name = name.strip() or None
+            apps.append(
+                PurchasedApp(
+                    store_id=store_id,
+                    bundle_id=bundle_id,
+                    display_name=name,
+                    version=item.get("version") if isinstance(item.get("version"), str) else None,
+                    price=str(item["price"]) if item.get("price") is not None else None,
+                    category=item.get("genre") if isinstance(item.get("genre"), str) else None,
+                )
+            )
+        return apps
+
+    @staticmethod
+    def explain_download_failure(text: str) -> str:
+        """User-facing hint for common ipatool download failures."""
+        low = (text or "").lower()
+        if "license" in low or "licence" in low:
+            return (
+                "На этом Apple ID нет лицензии на приложение. "
+                "Региональный поиск только находит ID — скачать можно лишь то, "
+                "что уже покупали/скачивали на этот аккаунт. "
+                "Флаг «получить лицензию» работает только если приложение "
+                "доступно в текущем регионе витрины."
+            )
+        if "password" in low or "passphrase" in low or "keychain" in low or "keyring" in low:
+            return (
+                "Проблема с Keychain passphrase / сессией. "
+                "Снова нажмите «Войти…» или введите passphrase в консоли."
+            )
+        if "login" in low or "auth" in low or "unauthor" in low or "session" in low:
+            return "Сессия App Store неактивна. Сначала «Войти…»."
+        if "not found" in low or "unavailable" in low or "no longer" in low:
+            return (
+                "Приложение недоступно для загрузки с текущей витрины, "
+                "либо ID неверный. Если лицензия есть — попробуйте числовой Store ID."
+            )
+        return (
+            "Загрузка не удалась. Проверьте консоль ipatool: "
+            "лицензия, регион витрины и passphrase."
+        )
+
+    def search(self, term: str) -> list[AppSearchResult]:
+        """Поиск приложений в App Store через ipatool search --format json."""
+        ipatool = self._ipatool()
+        result = self._runner.run(
+            [str(ipatool), "search", term, "--format", "json"],
+            timeout=120.0,
+            cwd=str(self._tools_dir),
+        )
+        return self._parse_search_results(result.stdout)
+
+    @staticmethod
+    def _parse_search_results(stdout: str) -> list[AppSearchResult]:
+        try:
+            data = json.loads(stdout or "[]")
+        except json.JSONDecodeError:
+            data = []
+        if not isinstance(data, list):
+            data = [data]
+        results: list[AppSearchResult] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            store_id = str(item.get("appId") or item.get("storeId") or "").strip() or None
+            bundle_id = item.get("bundleIdentifier")
+            if isinstance(bundle_id, str):
+                bundle_id = bundle_id.strip() or None
+            results.append(
+                AppSearchResult(
+                    store_id=store_id,
+                    bundle_id=bundle_id,
+                    display_name=item.get("title") or item.get("appName"),
+                    version=item.get("version"),
+                    price=item.get("price"),
+                    category=item.get("genre"),
+                )
+            )
+        return results
 
     def wait_for_new_ipa(
         self,

@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 
 from ios_restore.domain.errors import ErrorCode, RestoreError
-from ios_restore.domain.models import AppReference, DeviceInfo, PackageInfo
+from ios_restore.domain.models import AppReference, AppSearchResult, DeviceInfo, PackageInfo, PurchasedApp
 from ios_restore.infrastructure.tool_registry import required_tool_names
 
 
@@ -148,3 +148,135 @@ class MockInstallAdapter:
                 "Инструмент установки сообщил об ошибке.",
             )
         self.installed.append((package.local_path, device.device_id))
+
+
+class MockPurchasesAdapter:
+    def __init__(
+        self,
+        apps: list[PurchasedApp] | None = None,
+        *,
+        fail: bool = False,
+    ) -> None:
+        self._apps = apps or [
+            PurchasedApp(
+                store_id="1051293689",
+                bundle_id="com_example_demo_demo",
+                display_name="Demo App",
+                version="1.0.0",
+                price="Бесплатно",
+                category="Демо",
+            ),
+        ]
+        self._fail = fail
+
+    def list_purchases(self) -> list[PurchasedApp]:
+        if self._fail:
+            raise RestoreError(
+                ErrorCode.PURCHASES_FETCH_FAILED,
+                "Демо-ошибка получения архива покупок.",
+            )
+        return list(self._apps)
+
+
+class MockSearchAdapter:
+    def __init__(
+        self,
+        results: list[AppSearchResult] | None = None,
+        *,
+        fail: bool = False,
+    ) -> None:
+        self._results = results or [
+            AppSearchResult(
+                store_id="6737597349",
+                bundle_id="com.deepseek.chat",
+                display_name="DeepSeek AI Assistant",
+                version="1.0.0",
+                price="Бесплатно",
+                category="Продуктивность",
+            ),
+            AppSearchResult(
+                store_id="1051293689",
+                bundle_id="com_example_demo_demo",
+                display_name="Demo App",
+                version="1.0.0",
+                price="Бесплатно",
+                category="Демо",
+            ),
+        ]
+        self._fail = fail
+
+    def search(self, term: str) -> list[AppSearchResult]:
+        if self._fail:
+            raise RestoreError(
+                ErrorCode.SEARCH_FAILED,
+                "Демо-ошибка поиска приложений.",
+            )
+        # Фильтруем по термину, если передан
+        if term:
+            lowered = term.lower()
+            return [
+                r for r in self._results
+                if (r.display_name or "").lower().find(lowered) >= 0
+                or (r.bundle_id or "").lower().find(lowered) >= 0
+            ]
+        return list(self._results)
+
+
+class MockRegionalSearchAdapter:
+    def __init__(
+        self,
+        results: list[AppSearchResult] | None = None,
+        *,
+        fail: bool = False,
+    ) -> None:
+        self._results = results or [
+            AppSearchResult(
+                store_id="6737597349",
+                bundle_id="com.deepseek.chat",
+                display_name="DeepSeek AI Assistant",
+                version="1.0.0",
+                price="Бесплатно",
+                category="Продуктивность",
+                region="US",
+            ),
+            AppSearchResult(
+                store_id="1051293689",
+                bundle_id="com_example_demo_demo",
+                display_name="Demo App",
+                version="1.0.0",
+                price="Бесплатно",
+                category="Демо",
+                region="US",
+            ),
+        ]
+        self._fail = fail
+
+    def search_region(self, term: str, region_code: str) -> list[AppSearchResult]:
+        if self._fail:
+            raise RestoreError(
+                ErrorCode.REGIONAL_SEARCH_FAILED,
+                "Демо-ошибка регионального поиска.",
+            )
+        lowered = term.lower() if term else ""
+        filtered = [
+            r for r in self._results
+            if (r.region or "").upper() == region_code.upper()
+            and (
+                not lowered
+                or (r.display_name or "").lower().find(lowered) >= 0
+                or (r.bundle_id or "").lower().find(lowered) >= 0
+            )
+        ]
+        # Присваиваем регион результату
+        return [
+            AppSearchResult(
+                store_id=r.store_id,
+                bundle_id=r.bundle_id,
+                display_name=r.display_name,
+                version=r.version,
+                price=r.price,
+                category=r.category,
+                region=region_code,
+            )
+            for r in filtered
+        ]

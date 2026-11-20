@@ -126,6 +126,41 @@ class DownloadAppWorker(QRunnable):
             self.signals.failed.emit(str(exc))
 
 
+class FetchPurchasesWorker(QRunnable):
+    def __init__(self, adapter: AppStoreCliAdapter) -> None:
+        super().__init__()
+        self.adapter = adapter
+        self.signals = WorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            purchases = self.adapter.list_purchases()
+            self.signals.finished.emit(purchases)
+        except RestoreError as exc:
+            self.signals.failed.emit(_format_restore_error(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.signals.failed.emit(str(exc))
+
+
+class SearchAppWorker(QRunnable):
+    def __init__(self, adapter: AppStoreCliAdapter, term: str) -> None:
+        super().__init__()
+        self.adapter = adapter
+        self.term = term
+        self.signals = WorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            results = self.adapter.search(self.term)
+            self.signals.finished.emit(results)
+        except RestoreError as exc:
+            self.signals.failed.emit(_format_restore_error(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.signals.failed.emit(str(exc))
+
+
 class InstallAppWorker(QRunnable):
     def __init__(
         self,
@@ -149,6 +184,34 @@ class InstallAppWorker(QRunnable):
                     "package": self.package.local_path,
                 }
             )
+        except RestoreError as exc:
+            self.signals.failed.emit(_format_restore_error(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.signals.failed.emit(str(exc))
+
+
+class RegionalSearchAppWorker(QRunnable):
+    def __init__(
+        self,
+        adapter: object,  # RegionalSearchPort | SmartAppSearchService
+        term: str,
+        region_code: str,
+    ) -> None:
+        super().__init__()
+        self.adapter = adapter
+        self.term = term
+        self.region_code = region_code
+        self.signals = WorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            search = getattr(self.adapter, "search", None)
+            if callable(search):
+                results = search(self.term, self.region_code)
+            else:
+                results = self.adapter.search_region(self.term, self.region_code)
+            self.signals.finished.emit(results)
         except RestoreError as exc:
             self.signals.failed.emit(_format_restore_error(exc))
         except Exception as exc:  # noqa: BLE001
