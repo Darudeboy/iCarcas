@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ios_restore.application.diagnostics_service import DiagnosticsService
+from ios_restore.application.license_check_service import LicenseCheckService
 from ios_restore.application.regional_search_service import RegionalAppSearchService
 from ios_restore.application.smart_search_service import SmartAppSearchService
 from ios_restore.domain.models import (
@@ -44,6 +45,7 @@ from ios_restore.domain.models import (
     AppVersionInfo,
     CatalogApp,
     DeviceInfo,
+    LicenseCheckResult,
     PackageInfo,
     PurchasedApp,
 )
@@ -53,9 +55,11 @@ from ios_restore.infrastructure.apps_catalog import filter_catalog, load_apps_ca
 from ios_restore.infrastructure.appstore_cli_adapter import AppStoreCliAdapter
 from ios_restore.infrastructure.device_cli_adapter import DeviceCliAdapter
 from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAdapter
+from ios_restore.infrastructure.history_store import HistoryStore
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
 from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
+from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.ui.onboarding import ensure_onboarding, show_help_dialog
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
@@ -126,12 +130,13 @@ def _selected_data_index(table: QTableWidget) -> int | None:
     row_idx = table.currentRow()
     if row_idx < 0:
         return None
-    item = table.item(row_idx, 0)
-    if item is None:
-        return None
-    raw = item.data(Qt.ItemDataRole.UserRole)
-    if isinstance(raw, int):
-        return raw
+    for col in range(min(2, table.columnCount())):
+        item = table.item(row_idx, col)
+        if item is None:
+            continue
+        raw = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(raw, int):
+            return raw
     return row_idx
 
 
@@ -288,7 +293,12 @@ class MainWindow(QMainWindow):
         self._installer = InstallCliAdapter(tools_dir=tools)
         # Умный поиск: локальный каталог ID + iTunes (ранжирование, без мусора).
         self._smart_search = SmartAppSearchService()
+        self._license_check = LicenseCheckService()
+        self._history = HistoryStore(self._packages_dir / "icarcas-history.json")
         self._purchases_dump_path = self._appstore.purchases_dump_path(self._packages_dir)
+        self._purchases_cache: list[PurchasedApp] | None = None
+        self._account_storefront: str | None = None
+        self._last_display_name: str | None = None
 
         shell = QWidget()
         shell.setObjectName("root")
@@ -461,8 +471,12 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(self._on_download)
         self.pickup_button = make_button("Подхватить IPA")
         self.pickup_button.clicked.connect(self._on_pickup_ipa)
+        self.history_button = make_button("История…", "ghost")
+        self.history_button.setToolTip("Последние скачивания и установки")
+        self.history_button.clicked.connect(self._on_open_history)
         row.addWidget(self.download_button, 1)
         row.addWidget(self.pickup_button, 1)
+        row.addWidget(self.history_button, 0)
         self.card_app.body.addLayout(row)
         versions_row = QHBoxLayout()
         versions_row.setSpacing(10)
@@ -770,6 +784,7 @@ class MainWindow(QMainWindow):
         assert isinstance(info, dict)
         email = str(info.get("email") or "")
         storefront = str(info.get("storefront") or "")
+        self._account_storefront = storefront.upper() if storefront else self._account_storefront
         detail = "Сессия OK"
         if email:
             detail = email
@@ -1255,7 +1270,59 @@ class MainWindow(QMainWindow):
                 self, "Архив покупок", "В дампе приложений не найдено."
             )
             return
+        self._purchases_cache = purchases
         self._show_purchases_dialog(purchases)
+
+    def _load_purchases_cache(self) -> list[PurchasedApp]:
+        if self._purchases_cache is not None:
+            return self._purchases_cache
+        path = Path(self._purchases_dump_path)
+        if not path.is_file():
+            return []
+        try:
+            purchases = self._appstore.load_purchases_dump(path)
+        except Exception:  # noqa: BLE001
+            return []
+        self._purchases_cache = purchases
+        return purchases
+
+    def _check_license_for_app(
+        self,
+        *,
+        store_id: str | None,
+        bundle_id: str | None,
+        app_region: str | None = None,
+    ) -> LicenseCheckResult:
+        return self._license_check.check(
+            store_id=store_id,
+            bundle_id=bundle_id,
+            app_region=app_region,
+            purchases=self._load_purchases_cache(),
+            account_storefront=self._account_storefront,
+        )
+
+    def _on_open_history(self) -> None:
+        entries = self._history.list_entries()
+        if not entries:
+            QMessageBox.information(
+                self,
+                "История",
+                "Пока пусто — появится после скачивания или установки IPA.",
+            )
+            return
+        entry = show_history_dialog(
+            self,
+            entries=entries,
+            dialog_qss=_DIALOG_QSS,
+        )
+        if entry is None or not entry.ipa_path:
+            return
+        if entry.store_id:
+            self.app_input.setText(entry.store_id)
+        elif entry.bundle_id:
+            self.app_input.setText(entry.bundle_id)
+        self._last_display_name = entry.display_name
+        self._begin_inspect_ipa(Path(entry.ipa_path))
 
     def _show_purchases_dialog(self, purchases: list[PurchasedApp]) -> None:
         dialog = QDialog(self)
@@ -1403,7 +1470,7 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Поиск ID ({region_code}) — {len(results)}")
-        dialog.resize(1040, 620)
+        dialog.resize(1080, 680)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         dialog.setStyleSheet(_DIALOG_QSS)
         pal = _light_dialog_palette()
@@ -1412,14 +1479,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         hint = QLabel(
             f"Каталог + iTunes ({region_code}). "
-            "Пустые колонки скрыты. Полное название — в таблице и в блоке ниже "
-            "(проверьте ID перед скачиванием). "
-            "source=catalog может быть delisted; download только с лицензией."
+            "Карточка ниже: регион и оценка лицензии до скачивания."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        # Name + Store ID first so critical fields aren't squeezed away.
         table = QTableWidget(len(results), 7, dialog)
         table.setPalette(pal)
         table.setAutoFillBackground(True)
@@ -1444,10 +1508,16 @@ class MainWindow(QMainWindow):
                 ),
                 data_index=row_idx,
             )
-        _tune_data_table(table, name_col=0)
+        _tune_data_table(table, name_col=0, hide_empty_columns=True)
         layout.addWidget(table)
-        detail = _make_selection_detail(dialog)
-        layout.addWidget(detail)
+
+        card_text = _make_selection_detail(dialog)
+        card_text.setText("Выберите строку — карточка приложения.")
+        layout.addWidget(card_text)
+        license_lbl = QLabel("")
+        license_lbl.setWordWrap(True)
+        license_lbl.setObjectName("selectionDetail")
+        layout.addWidget(license_lbl)
 
         try_purchase = QCheckBox(
             "Попробовать --purchase (только текущий storefront, не чужой регион)"
@@ -1475,19 +1545,39 @@ class MainWindow(QMainWindow):
             assert isinstance(app, AppSearchResult)
             return app
 
+        def _apply_card(app: AppSearchResult, license_result: LicenseCheckResult) -> None:
+            card_text.setText(
+                f"{app.display_name or '—'}\n"
+                f"Store ID: {app.store_id or '—'} · "
+                f"Регион: {app.region or region_code}\n"
+                f"Bundle: {app.bundle_id or '—'}\n"
+                f"Источник: {app.source or '—'} · "
+                f"Seller: {app.seller_name or '—'} · "
+                f"Версия: {app.version or '—'}"
+            )
+            status_map = {
+                "licensed": "Лицензия: похоже, есть",
+                "not_found": "Лицензия: в архиве покупок не найдена",
+                "region_mismatch": "Лицензия: конфликт региона витрины",
+                "unknown": "Лицензия: неизвестно (нет архива покупок)",
+            }
+            license_lbl.setText(
+                f"{status_map.get(license_result.status, 'Лицензия')}\n"
+                f"{license_result.message}"
+            )
+
         def _on_sel() -> None:
             app = _selected(quiet=True)
             if app is None:
-                detail.setText("Выберите строку — здесь будет полное название и ID.")
+                card_text.setText("Выберите строку — карточка приложения.")
+                license_lbl.clear()
                 return
-            detail.setText(
-                f"{app.display_name or '—'}\n"
-                f"Store ID: {app.store_id or '—'}\n"
-                f"Bundle: {app.bundle_id or '—'}\n"
-                f"Источник: {app.source or '—'} | "
-                f"Seller: {app.seller_name or '—'} | "
-                f"Версия: {app.version or '—'}"
+            lic = self._license_check.check_search_result(
+                app,
+                purchases=self._load_purchases_cache(),
+                account_storefront=self._account_storefront,
             )
+            _apply_card(app, lic)
 
         table.itemSelectionChanged.connect(_on_sel)
 
@@ -1496,11 +1586,17 @@ class MainWindow(QMainWindow):
             if app is None:
                 return
             self._apply_app_reference(app.store_id, app.bundle_id)
+            self._last_display_name = app.display_name
             self.search_input.clear()
             dialog.accept()
+            lic = self._license_check.check_search_result(
+                app,
+                purchases=self._load_purchases_cache(),
+                account_storefront=self._account_storefront,
+            )
             self.output.setPlainText(
                 f"ID из региона {region_code}: {app.display_name or '—'}\n"
-                f"Подставлено в поле. Скачивание — только при лицензии на текущем ID.\n"
+                f"{lic.message}\n"
                 + AppStoreCliAdapter.explain_download_failure("license")
             )
 
@@ -1512,19 +1608,27 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(dialog, "Скачать", "У записи нет Store ID / bundle.")
                 return
             self._apply_app_reference(app.store_id, app.bundle_id)
+            self._last_display_name = app.display_name
             self.try_purchase_check.setChecked(try_purchase.isChecked())
             self.search_input.clear()
             dialog.accept()
             ref = (
-                AppReference(store_id=app.store_id)
+                AppReference(store_id=app.store_id, display_name=app.display_name)
                 if app.store_id
-                else AppReference(bundle_id=app.bundle_id)
+                else AppReference(bundle_id=app.bundle_id, display_name=app.display_name)
             )
-            self._start_download(ref, confirm=True)
+            self._start_download(
+                ref,
+                confirm=True,
+                app_region=app.region or str(region_code),
+            )
 
         use_btn.clicked.connect(on_use)
         dl_btn.clicked.connect(on_download)
         buttons.rejected.connect(dialog.reject)
+        if results:
+            table.selectRow(0)
+            _on_sel()
         dialog.exec()
 
     def _on_download(self) -> None:
@@ -1540,11 +1644,12 @@ class MainWindow(QMainWindow):
         *,
         confirm: bool,
         external_version_id: str | None = None,
+        app_region: str | None = None,
     ) -> None:
         if not self._require_tos():
             return
         try_purchase = self.try_purchase_check.isChecked()
-        target = app.bundle_id or app.store_id or "?"
+        target = app.display_name or app.bundle_id or app.store_id or "?"
         version_line = (
             f"версия (external-version-id): {external_version_id}\n"
             if external_version_id
@@ -1556,19 +1661,32 @@ class MainWindow(QMainWindow):
             if headless
             else "Режим: консоль ipatool (введите passphrase вручную).\n"
         )
+        license_result = self._check_license_for_app(
+            store_id=app.store_id,
+            bundle_id=app.bundle_id,
+            app_region=app_region,
+        )
+        license_line = f"Лицензия: {license_result.message}\n"
         msg = (
             "Начать download IPA?\n"
             f"{target}\n"
+            f"ID: {app.store_id or app.bundle_id}\n"
             f"{version_line}"
             f"{mode_line}"
+            f"{license_line}"
             f"Каталог: {self._packages_dir}\n"
-            f"--purchase: {'да (текущий storefront)' if try_purchase else 'нет'}\n\n"
-            "Нужна лицензия на текущем Apple ID."
+            f"--purchase: {'да (текущий storefront)' if try_purchase else 'нет'}\n"
         )
+        if license_result.status == "not_found" and not try_purchase:
+            msg += "\nВ архиве покупок ID не найден — загрузка, скорее всего, упадёт."
+        if license_result.status == "region_mismatch":
+            msg += "\nРегион витрины не совпадает — высокий риск отказа."
         if confirm:
             answer = QMessageBox.question(self, "Загрузка", msg)
             if answer != QMessageBox.StandardButton.Yes:
                 return
+        if app.display_name:
+            self._last_display_name = app.display_name
         before_mtimes = self._appstore.list_ipa_mtimes(self._packages_dir)
         try:
             self._appstore.begin_interactive_download(
@@ -1939,36 +2057,46 @@ class MainWindow(QMainWindow):
     def _on_pickup_ipa(self) -> None:
         raw = self.app_input.text().strip()
         preferred = raw if raw.isdigit() else getattr(self, "_download_store_id", None)
-        path = self._choose_ipa_path(preferred_store_id=preferred)
+        path = self._choose_ipa_path(preferred_store_id=preferred, interactive=True)
         if path is None:
             return
         self._begin_inspect_ipa(path)
 
-    def _choose_ipa_path(self, *, preferred_store_id: str | None) -> Path | None:
+    def _choose_ipa_path(
+        self,
+        *,
+        preferred_store_id: str | None,
+        interactive: bool = True,
+    ) -> Path | None:
         entries = self._appstore.list_ipa_entries(self._packages_dir)
         if not entries:
-            QMessageBox.information(
-                self,
-                "IPA",
-                f"В {self._packages_dir} нет .ipa.\n"
-                "Сначала скачайте приложение или положите файл в packages.",
-            )
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "IPA",
+                    f"В {self._packages_dir} нет .ipa.\n"
+                    "Сначала скачайте приложение или положите файл в packages.",
+                )
             return None
 
         before = getattr(self, "_download_before_names", set())
+        before_mtimes = getattr(self, "_download_before_mtimes", {})
         auto = self._appstore.find_ipa_path(
             self._packages_dir,
             before_names=before,
+            before_mtimes=before_mtimes,
             preferred_store_id=preferred_store_id,
         )
-        # Один явный match по Store ID — без диалога.
+        # Match по Store ID — без диалога (автоподхват).
         sid = (preferred_store_id or "").strip()
         if sid.isdigit():
             matched = [e for e in entries if e[0].name.startswith(f"{sid}_")]
-            if len(matched) == 1:
-                return matched[0][0]
             if matched:
-                entries = matched + [e for e in entries if e not in matched]
+                return max(matched, key=lambda e: e[2])[0]
+        if not interactive:
+            return auto
+        if len(entries) == 1:
+            return entries[0][0]
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Выберите IPA")
@@ -2115,34 +2243,67 @@ class MainWindow(QMainWindow):
         self.card_app.set_state("done", "IPA готов")
         name = Path(package.local_path).name
         mb = package.size_bytes / (1024 * 1024)
+        store_id = getattr(self, "_download_store_id", None)
+        if not store_id:
+            stem = Path(package.local_path).stem
+            store_id = stem.split("_", 1)[0] if stem[:1].isdigit() else None
+        display = self._last_display_name or package.bundle_id or name
+        self._history.record_download(
+            ipa_path=str(Path(package.local_path).resolve()),
+            store_id=store_id,
+            bundle_id=package.bundle_id,
+            display_name=display,
+            version=package.version,
+        )
         self._set_download_progress_ui(
             phase="ok",
             percent=100,
             title="IPA готов к установке",
-            detail=f"{name} · {mb:.1f} МБ",
+            detail=f"{display} · {name} · {mb:.1f} МБ",
             label="Можно нажать «Установить на iPhone»",
         )
         self.output.setPlainText(
-            "IPA подхвачен.\n"
-            f"Путь: {package.local_path}\n"
-            f"Размер: {package.size_bytes}\n"
-            f"SHA-256: {package.sha256}\n"
-            f"bundle_id: {package.bundle_id or 'не извлечён'}\n"
-            f"version: {package.version or 'не извлечена'}\n"
-            f"min iOS: {package.minimum_os_version or 'не извлечена'}\n"
+            f"IPA готов: {display}\n"
+            f"Файл: {package.local_path}\n"
+            f"bundle_id: {package.bundle_id or '—'} · "
+            f"version: {package.version or '—'} · "
+            f"min iOS: {package.minimum_os_version or '—'}\n"
             "Можно устанавливать на iPhone."
         )
         self._set_busy(False)
 
     def _on_install_done(self, payload: object) -> None:
         assert isinstance(payload, dict)
-        self.output.setPlainText(
-            "Инструмент установки сообщил об успехе.\n"
-            f"Устройство: {payload.get('device_id')}\n"
-            f"Пакет: {payload.get('package')}\n"
-            "Запуск приложения на iPhone отдельно не проверялся."
+        pkg = self._package
+        device = self._devices[0] if self._devices else None
+        app_name = (
+            self._last_display_name
+            or (pkg.bundle_id if pkg else None)
+            or Path(str(payload.get("package") or "app")).stem
         )
+        if pkg is not None:
+            store_id = getattr(self, "_download_store_id", None)
+            self._history.record_install(
+                ipa_path=str(Path(pkg.local_path).resolve()),
+                device_name=device.display_name if device else None,
+                store_id=store_id,
+                bundle_id=pkg.bundle_id,
+                display_name=app_name,
+                version=pkg.version,
+            )
         self._set_busy(False)
+        show_install_success_dialog(
+            self,
+            app_name=str(app_name),
+            device_name=(device.display_name if device else str(payload.get("device_id") or "iPhone")),
+            version=pkg.version if pkg else None,
+            dialog_qss=_DIALOG_QSS,
+        )
+        self.output.setPlainText(
+            f"Установлено: {app_name}\n"
+            f"Устройство: {payload.get('device_id')}\n"
+            "Откройте приложение на iPhone."
+        )
 
     def _on_worker_failed(self, message: str) -> None:
         self._set_busy(False)
@@ -2177,6 +2338,7 @@ class MainWindow(QMainWindow):
             self.logout_button,
             self.download_button,
             self.pickup_button,
+            self.history_button,
             self.versions_button,
             self.pickup_versions_button,
             self.catalog_button,

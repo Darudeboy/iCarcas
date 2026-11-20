@@ -120,6 +120,36 @@ class AppSearchResult:
     region: str | None = None
     source: str | None = None  # catalog | itunes | lookup
     seller_name: str | None = None
+    artwork_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LicenseCheckResult:
+    """Предварительная оценка лицензии до download."""
+
+    status: str  # licensed | not_found | unknown | region_mismatch
+    message: str
+    storefront: str | None = None
+    app_region: str | None = None
+
+    @property
+    def ok_to_download(self) -> bool:
+        return self.status in {"licensed", "unknown"}
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryEntry:
+    """Локальная история скачиваний / установок."""
+
+    kind: str  # download | install
+    at: str
+    store_id: str | None = None
+    bundle_id: str | None = None
+    display_name: str | None = None
+    version: str | None = None
+    ipa_path: str | None = None
+    artwork_url: str | None = None
+    device_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

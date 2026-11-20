@@ -141,6 +141,7 @@ class SmartAppSearchService:
                         region=region_code,
                         source=f"{existing[1].source}+itunes",
                         seller_name=app.seller_name,
+                        artwork_url=app.artwork_url or existing[1].artwork_url,
                     )
                     add(enriched, max(existing[0], score) + 50)
                     continue

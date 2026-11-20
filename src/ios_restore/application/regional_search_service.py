@@ -62,11 +62,12 @@ class iTunesRegionalSearchAdapter:
         return ranked
 
     def lookup_id(self, store_id: str, region_code: str) -> AppSearchResult | None:
-        data = self._get_json(
-            ITUNES_LOOKUP_URL,
-            {"id": store_id, "country": region_code},
-        )
-        return self._first_result(data, region_code, source="lookup")
+        params: dict[str, str] = {"id": store_id}
+        code = (region_code or "").strip()
+        if code:
+            params["country"] = code
+        data = self._get_json(ITUNES_LOOKUP_URL, params)
+        return self._first_result(data, region_code or "XX", source="lookup")
 
     def lookup_bundle(self, bundle_id: str, region_code: str) -> AppSearchResult | None:
         data = self._get_json(
@@ -166,6 +167,7 @@ class iTunesRegionalSearchAdapter:
     ) -> AppSearchResult:
         bundle_id = item.get("bundleId")
         store_id = item.get("trackId")
+        artwork = item.get("artworkUrl512") or item.get("artworkUrl100")
         return AppSearchResult(
             store_id=str(store_id) if store_id is not None else None,
             bundle_id=bundle_id if isinstance(bundle_id, str) else None,
@@ -182,6 +184,7 @@ class iTunesRegionalSearchAdapter:
             seller_name=(
                 item.get("sellerName") if isinstance(item.get("sellerName"), str) else None
             ),
+            artwork_url=artwork if isinstance(artwork, str) and artwork.startswith("http") else None,
         )
 
     @staticmethod
