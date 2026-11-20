@@ -1,6 +1,6 @@
 # iCarcas
 
-Локальная настольная утилита для Windows: загрузка оригинальных App Store-пакетов, доступных вашему Apple ID, и установка на ваш iPhone.
+Локальная настольная утилита (Windows / macOS): загрузка оригинальных App Store-пакетов, доступных вашему Apple ID, и установка на ваш iPhone. Учётные данные и ключ сессии хранятся только на этом компьютере.
 
 ```powershell
 .\scripts\run-icarcas.ps1          # venv + проверки CLI + запуск
@@ -18,9 +18,10 @@ python -m ios_restore --no-splash  # без анимации слоёв
 
 ## Требования
 
-- Windows 10/11 x64
-- Python 3.12–3.13 с [python.org](https://www.python.org/downloads/) (не Microsoft Store)
-- Позже (не на этапе 1): `ipatool`, инструменты libimobiledevice / `ideviceinstaller`, драйверы Apple Mobile Device Support
+- Windows 10/11 x64 или macOS (Apple Silicon / Intel)
+- Python 3.12–3.13 ([python.org](https://www.python.org/downloads/); на Windows — не Microsoft Store)
+- `ipatool` и инструменты libimobiledevice / `ideviceinstaller` в `tools/libimobiledevice`
+- На Windows: драйверы Apple Mobile Device Support
 
 ## Быстрый старт (mock)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ios_restore.domain.errors import ErrorCode, RestoreError
-from ios_restore.infrastructure.paths import default_tools_dir
+from ios_restore.infrastructure.paths import default_tools_dir, resolve_tool
 
 # Stage-2 minimum for real device detection.
 DEVICE_STAGE_TOOLS = (
@@ -24,7 +24,7 @@ class EnvironmentCliAdapter:
         ready: list[str] = []
         missing: list[str] = []
         for name in DEVICE_STAGE_TOOLS:
-            path = self._tools_dir / f"{name}.exe"
+            path = resolve_tool(name, self._tools_dir)
             if path.is_file():
                 ready.append(name)
             else:
@@ -36,11 +36,11 @@ class EnvironmentCliAdapter:
                 + ", ".join(missing)
                 + f". Ожидаются в {self._tools_dir}",
             )
-        ipatool = self._tools_dir / "ipatool.exe"
+        ipatool = resolve_tool("ipatool", self._tools_dir)
         if not ipatool.is_file():
             raise RestoreError(
                 ErrorCode.TOOL_NOT_FOUND,
-                f"ipatool.exe не найден в {self._tools_dir}",
+                f"ipatool не найден в {self._tools_dir}",
             )
         ready.append("ipatool")
         return ready

@@ -16,7 +16,7 @@ def test_parse_json_blob_line() -> None:
 
 
 def test_list_ipa_names(tmp_path: Path) -> None:
-    (tmp_path / "a.ipa").write_bytes(b"PK")
+    (tmp_path / "a.ipa").write_bytes(b"PK" + b"\0" * 1100)
     (tmp_path / "note.txt").write_text("x", encoding="utf-8")
     names = AppStoreCliAdapter().list_ipa_names(tmp_path)
     assert names == {"a.ipa"}

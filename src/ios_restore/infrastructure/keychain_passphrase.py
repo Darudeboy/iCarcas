@@ -1,36 +1,41 @@
-"""Optional local storage of ipatool Keychain passphrase via Windows DPAPI."""
+"""Local storage of ipatool Keychain passphrase.
+
+Windows: DPAPI blob under %LOCALAPPDATA%/iCarcas.
+macOS/Linux: mode-0600 file under application support / XDG config.
+Never uploaded — stays on this machine only.
+"""
 
 from __future__ import annotations
 
-import ctypes
 import logging
+import os
 import sys
-from ctypes import wintypes
 from pathlib import Path
 
 logger = logging.getLogger("ios_restore.keychain_passphrase")
 
 
-class DATA_BLOB(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-
 def app_data_dir() -> Path:
-    base = Path.home() / "AppData" / "Local" / "iCarcas"
     if sys.platform == "win32":
         local = Path.home() / "AppData" / "Local"
-        if local.is_dir():
-            base = local / "iCarcas"
+        base = (local if local.is_dir() else Path.home()) / "iCarcas"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "iCarcas"
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) / "icarcas" if xdg else Path.home() / ".config" / "icarcas"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
 
 def passphrase_path() -> Path:
-    return app_data_dir() / "keychain_passphrase.dpapi"
+    if sys.platform == "win32":
+        return app_data_dir() / "keychain_passphrase.dpapi"
+    return app_data_dir() / "keychain_passphrase"
 
 
 def is_available() -> bool:
-    return sys.platform == "win32"
+    return True
 
 
 def has_stored_passphrase() -> bool:
@@ -46,24 +51,32 @@ def clear_passphrase() -> None:
 
 
 def save_passphrase(passphrase: str) -> None:
-    if not is_available():
-        raise OSError("DPAPI passphrase storage is only supported on Windows.")
     text = (passphrase or "").strip()
     if not text:
         raise ValueError("Empty passphrase")
-    blob = _dpapi_protect(text.encode("utf-8"))
     path = passphrase_path()
-    path.write_bytes(blob)
-    logger.info("Stored keychain passphrase under DPAPI at %s", path)
+    if sys.platform == "win32":
+        blob = _dpapi_protect(text.encode("utf-8"))
+        path.write_bytes(blob)
+    else:
+        path.write_text(text, encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    logger.info("Stored keychain passphrase at %s", path)
 
 
 def load_passphrase() -> str | None:
-    if not is_available() or not has_stored_passphrase():
+    if not has_stored_passphrase():
         return None
+    path = passphrase_path()
     try:
-        raw = passphrase_path().read_bytes()
-        data = _dpapi_unprotect(raw)
-        text = data.decode("utf-8").strip()
+        if sys.platform == "win32":
+            data = _dpapi_unprotect(path.read_bytes())
+            text = data.decode("utf-8").strip()
+        else:
+            text = path.read_text(encoding="utf-8").strip()
         return text or None
     except OSError as exc:
         logger.warning("Failed to unlock stored passphrase: %s", exc)
@@ -71,6 +84,12 @@ def load_passphrase() -> str | None:
 
 
 def _dpapi_protect(data: bytes) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
     blob_in = DATA_BLOB(len(data), ctypes.create_string_buffer(data, len(data)))
     blob_out = DATA_BLOB()
     if not ctypes.windll.crypt32.CryptProtectData(
@@ -90,6 +109,12 @@ def _dpapi_protect(data: bytes) -> bytes:
 
 
 def _dpapi_unprotect(data: bytes) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
     blob_in = DATA_BLOB(len(data), ctypes.create_string_buffer(data, len(data)))
     blob_out = DATA_BLOB()
     if not ctypes.windll.crypt32.CryptUnprotectData(

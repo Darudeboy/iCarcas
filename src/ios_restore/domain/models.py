@@ -178,12 +178,12 @@ class AppStoreRegion:
 
 
 KNOWN_REGIONS: tuple[AppStoreRegion, ...] = (
-    AppStoreRegion("US", "США"),
     AppStoreRegion("RU", "Россия"),
-    AppStoreRegion("GB", "Великобритания"),
+    AppStoreRegion("US", "США"),
+    AppStoreRegion("TR", "Турция"),
+    AppStoreRegion("GB", "Англия"),
     AppStoreRegion("DE", "Германия"),
     AppStoreRegion("FR", "Франция"),
     AppStoreRegion("JP", "Япония"),
     AppStoreRegion("CA", "Канада"),
-    AppStoreRegion("AU", "Австралия"),
 )

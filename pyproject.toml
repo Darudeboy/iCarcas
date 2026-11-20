@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ios-restore"
-version = "0.1.0"
-description = "Local Windows utility to download owned App Store packages and install them on the user's iPhone"
+version = "0.2.0"
+description = "Local cross-platform utility to download owned App Store packages and install them on the user's iPhone (Windows/macOS)"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = "LicenseRef-Proprietary"

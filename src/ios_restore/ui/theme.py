@@ -8,6 +8,8 @@
     QFrame#card            -> карточка
     QLabel#stepBadge       -> кружок шага, property state = idle | active | done
     QLabel#chip            -> плашка статуса, property state = idle | ok
+    QToolButton#cornerChip -> угол: iPhone / сессия
+    QLabel#privacyNotice   -> локальное хранение УЗ
     QPlainTextEdit#log     -> журнал
 """
 from __future__ import annotations
@@ -82,6 +84,52 @@ QLabel#chip {
     padding: 4px 12px; font-size: 12px;
 }
 QLabel#chip[state="ok"] { background: $ok_bg; color: $ok; border-color: $ok_border; }
+
+QToolButton#cornerChip {
+    background: $surface; color: $muted;
+    border: 1px solid $border; border-radius: 12px;
+    padding: 6px 14px; font-size: 12px; font-weight: 600;
+}
+QToolButton#cornerChip[state="ok"],
+QToolButton#cornerChip[state="busy"] {
+    background: $ok_bg; color: $ok; border-color: $ok_border;
+}
+QToolButton#cornerChip:hover { background: $hover; border-color: $border_strong; }
+QToolButton#cornerChip[state="ok"]:hover,
+QToolButton#cornerChip[state="busy"]:hover {
+    background: $ok_bg; border-color: $ok; color: $ok;
+}
+QToolButton#cornerChip:disabled { color: $muted; background: transparent; }
+QToolButton#cornerChip[state="ok"]:disabled,
+QToolButton#cornerChip[state="busy"]:disabled {
+    background: $ok_bg; color: $ok; border-color: $ok_border;
+}
+
+QLabel#privacyNotice {
+    color: $muted; font-size: 12px;
+    padding: 2px 2px 4px 2px;
+}
+
+QPushButton#regionTag {
+    background: $surface; color: $muted;
+    border: 1px solid $border; border-radius: 12px;
+    padding: 6px 10px; font-size: 12px; font-weight: 600;
+}
+QPushButton#regionTag[state="ok"] {
+    background: $ok_bg; color: $ok; border-color: $ok_border;
+}
+QPushButton#regionTag:hover {
+    background: $hover; border-color: $border_strong;
+}
+QPushButton#regionTag[state="ok"]:hover {
+    background: $ok_bg; color: $ok; border-color: $ok;
+}
+QPushButton#regionTag:disabled {
+    color: $muted; background: transparent;
+}
+QPushButton#regionTag[state="ok"]:disabled {
+    background: $ok_bg; color: $ok; border-color: $ok_border;
+}
 
 /* ---------- Кнопки ---------- */
 QPushButton {

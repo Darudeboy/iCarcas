@@ -24,16 +24,12 @@ class InstallCliAdapter:
 
     def install(self, package: PackageInfo, device: DeviceInfo) -> None:
         installer = resolve_tool("ideviceinstaller", self._tools_dir)
-        if not Path(installer).is_file() and not str(installer).endswith("ideviceinstaller"):
-            # resolve_tool may return bare name; prefer local exe
-            local = self._tools_dir / "ideviceinstaller.exe"
-            if local.is_file():
-                installer = local
-            else:
-                raise RestoreError(
-                    ErrorCode.TOOL_NOT_FOUND,
-                    "ideviceinstaller.exe не найден.",
-                )
+        if not Path(installer).is_file():
+            raise RestoreError(
+                ErrorCode.TOOL_NOT_FOUND,
+                "ideviceinstaller не найден.",
+                details=str(self._tools_dir),
+            )
 
         package_path = Path(package.local_path)
         if not package_path.is_file():

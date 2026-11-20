@@ -49,19 +49,18 @@ class AppStoreCliAdapter:
         if not path.is_file():
             raise RestoreError(
                 ErrorCode.TOOL_NOT_FOUND,
-                "ipatool.exe не найден. Положите бинарник в каталог tools.",
+                "ipatool не найден. Положите бинарник в каталог tools/libimobiledevice.",
                 details=str(path),
             )
         return path
 
     def _open_console(self, ipatool_args: list[str]) -> None:
         ipatool = self._ipatool()
-        # Build a cmd.exe line that keeps the window open after the command.
-        # Passphrase is typed interactively in that console — never from our GUI argv.
-        inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
         logger.info("Opening interactive ipatool console: %s", " ".join(ipatool_args))
         if sys.platform == "win32":
-            cmdline = f'{inner} & echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause'
+            # Passphrase is typed interactively in that console — never from our GUI argv.
+            inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
+            cmdline = f"{inner} & echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause"
             try:
                 subprocess.Popen(  # noqa: S603
                     ["cmd.exe", "/k", cmdline],
@@ -75,9 +74,53 @@ class AppStoreCliAdapter:
                     details=str(exc),
                 ) from exc
             return
+        self._open_unix_terminal([str(ipatool), *ipatool_args])
+
+    def _open_unix_terminal(self, argv: list[str], *, banner: str | None = None) -> None:
+        """Launch argv in Terminal.app (macOS) or a common Linux terminal."""
+        import shlex
+
+        cwd = str(self._tools_dir)
+        quoted = " ".join(shlex.quote(part) for part in argv)
+        banner_cmd = f"echo {shlex.quote(banner)}; echo; " if banner else ""
+        shell_line = (
+            f"cd {shlex.quote(cwd)} && {banner_cmd}{quoted}; "
+            f"echo; echo '===== DONE ====='; read -n 1 -s -r -p 'Press any key to close…'"
+        )
+        try:
+            if sys.platform == "darwin":
+                # AppleScript: open Terminal and run the command.
+                osa = (
+                    'tell application "Terminal"\n'
+                    "activate\n"
+                    f'do script {json.dumps(shell_line)}\n'
+                    "end tell\n"
+                )
+                subprocess.Popen(  # noqa: S603
+                    ["osascript", "-e", osa],
+                    cwd=cwd,
+                )
+                return
+            for term in (
+                ["x-terminal-emulator", "-e", "bash", "-lc", shell_line],
+                ["gnome-terminal", "--", "bash", "-lc", shell_line],
+                ["konsole", "-e", "bash", "-lc", shell_line],
+                ["xterm", "-e", "bash", "-lc", shell_line],
+            ):
+                try:
+                    subprocess.Popen(term, cwd=cwd)  # noqa: S603
+                    return
+                except OSError:
+                    continue
+        except OSError as exc:
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось открыть терминал для ipatool.",
+                details=str(exc),
+            ) from exc
         raise RestoreError(
             ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-            "Интерактивная консоль ipatool сейчас поддерживается на Windows.",
+            "Не найден терминал (Terminal.app / gnome-terminal / xterm).",
         )
 
     def begin_interactive_login(self) -> None:
@@ -132,30 +175,27 @@ class AppStoreCliAdapter:
 
     def _open_console_with_banner(self, ipatool_args: list[str], *, banner: str) -> None:
         ipatool = self._ipatool()
-        inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
-        if sys.platform != "win32":
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Интерактивная консоль ipatool сейчас поддерживается на Windows.",
-            )
-        # Escape carets minimally; banner is our constant ASCII text.
-        cmdline = (
-            f"echo {banner} & echo. & {inner} "
-            f"& echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause"
-        )
         logger.info("Opening interactive ipatool console: %s", " ".join(ipatool_args))
-        try:
-            subprocess.Popen(  # noqa: S603
-                ["cmd.exe", "/k", cmdline],
-                cwd=str(self._tools_dir),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+        if sys.platform == "win32":
+            inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
+            cmdline = (
+                f"echo {banner} & echo. & {inner} "
+                f"& echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause"
             )
-        except OSError as exc:
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Не удалось открыть окно ipatool.",
-                details=str(exc),
-            ) from exc
+            try:
+                subprocess.Popen(  # noqa: S603
+                    ["cmd.exe", "/k", cmdline],
+                    cwd=str(self._tools_dir),
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+                )
+            except OSError as exc:
+                raise RestoreError(
+                    ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                    "Не удалось открыть окно ipatool.",
+                    details=str(exc),
+                ) from exc
+            return
+        self._open_unix_terminal([str(ipatool), *ipatool_args], banner=banner)
 
     def begin_interactive_revoke(self) -> None:
         self._open_console(["auth", "revoke"])
@@ -278,7 +318,9 @@ class AppStoreCliAdapter:
         external_version_id: str | None = None,
         max_attempts: int = 5,
     ) -> Path:
-        """Run tools/download-one.ps1 with stored passphrase and retries."""
+        """Run download-one.ps1 (Windows) or download_one.py (macOS/Linux) with retries."""
+        import os
+
         passphrase = kc_pass.load_passphrase()
         if not passphrase:
             raise RestoreError(
@@ -287,60 +329,85 @@ class AppStoreCliAdapter:
             )
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
-        script = self._resolve_tools_script("download-one.ps1")
         result_path = self.download_result_path(dest)
         if result_path.is_file():
             result_path.unlink()
         self.clear_download_progress(dest)
-        ps_args = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-            "-OutDir",
-            str(dest),
-            "-MaxAttempts",
-            str(max_attempts),
-        ]
-        if app.bundle_id:
-            ps_args.extend(["-BundleId", app.bundle_id])
-        elif app.store_id:
-            ps_args.extend(["-AppId", app.store_id])
-        else:
-            raise RestoreError(
-                ErrorCode.APP_UNAVAILABLE,
-                "Нужен bundle_id или store_id приложения.",
-            )
-        if external_version_id:
-            ps_args.extend(["-ExternalVersionId", external_version_id])
-        if try_purchase:
-            ps_args.append("-TryPurchase")
-        import os
-
         env = {**os.environ, "IPATOOL_KC_PASS": passphrase}
+        try:
+            env["IPATOOL_BIN"] = str(self._ipatool())
+        except RestoreError:
+            pass
         logger.info(
             "Starting headless download script app=%s attempts=%s",
             app.store_id or app.bundle_id,
             max_attempts,
         )
-        # Без видимой консоли: раньше окно мелькало с красным выводом и сразу закрывалось.
-        # Прогресс — через download-result.json и журнал UI.
         creationflags = 0
         if sys.platform == "win32":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            script = self._resolve_tools_script("download-one.ps1")
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-OutDir",
+                str(dest),
+                "-MaxAttempts",
+                str(max_attempts),
+            ]
+            if app.bundle_id:
+                cmd.extend(["-BundleId", app.bundle_id])
+            elif app.store_id:
+                cmd.extend(["-AppId", app.store_id])
+            else:
+                raise RestoreError(
+                    ErrorCode.APP_UNAVAILABLE,
+                    "Нужен bundle_id или store_id приложения.",
+                )
+            if external_version_id:
+                cmd.extend(["-ExternalVersionId", external_version_id])
+            if try_purchase:
+                cmd.append("-TryPurchase")
+            cwd = str(script.parent)
+        else:
+            script = self._resolve_tools_script("download_one.py")
+            cmd = [
+                sys.executable,
+                str(script),
+                "--out-dir",
+                str(dest),
+                "--max-attempts",
+                str(max_attempts),
+            ]
+            if app.bundle_id:
+                cmd.extend(["--bundle-id", app.bundle_id])
+            elif app.store_id:
+                cmd.extend(["--app-id", app.store_id])
+            else:
+                raise RestoreError(
+                    ErrorCode.APP_UNAVAILABLE,
+                    "Нужен bundle_id или store_id приложения.",
+                )
+            if external_version_id:
+                cmd.extend(["--external-version-id", external_version_id])
+            if try_purchase:
+                cmd.append("--try-purchase")
+            cwd = str(script.parent)
         try:
             self._active_proc = subprocess.Popen(  # noqa: S603
-                ps_args,
-                cwd=str(script.parent),
+                cmd,
+                cwd=cwd,
                 env=env,
                 creationflags=creationflags,
             )
         except OSError as exc:
             raise RestoreError(
                 ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Не удалось запустить download-one.ps1.",
+                "Не удалось запустить фоновую загрузку IPA.",
                 details=str(exc),
             ) from exc
         return dest
@@ -412,41 +479,57 @@ class AppStoreCliAdapter:
         *,
         cwd: Path | None = None,
     ) -> None:
-        """Launch a tools/*.ps1 with IPATOOL_KC_PASS if stored, else interactive console."""
-        script = self._resolve_tools_script(script_name)
-        passphrase = kc_pass.load_passphrase()
-        args = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-            *(extra_args or []),
-        ]
-        env = None
-        if passphrase:
-            import os
+        """Launch a tools script with IPATOOL_KC_PASS if stored, else interactive console."""
+        import os
 
-            env = {**os.environ, "IPATOOL_KC_PASS": passphrase}
-        if sys.platform != "win32":
-            raise RestoreError(
-                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                "Скрипты ipatool сейчас поддерживаются на Windows.",
-            )
+        passphrase = kc_pass.load_passphrase()
+        env = {**os.environ}
+        if passphrase:
+            env["IPATOOL_KC_PASS"] = passphrase
         try:
-            self._active_proc = subprocess.Popen(  # noqa: S603
-                ["cmd.exe", "/k", subprocess.list2cmdline(args) + " & echo. & pause"],
-                cwd=str(cwd or script.parent),
-                env=env,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
-            )
-        except OSError as exc:
+            env["IPATOOL_BIN"] = str(self._ipatool())
+        except RestoreError:
+            pass
+
+        if sys.platform == "win32":
+            script = self._resolve_tools_script(script_name)
+            args = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                *(extra_args or []),
+            ]
+            try:
+                self._active_proc = subprocess.Popen(  # noqa: S603
+                    ["cmd.exe", "/k", subprocess.list2cmdline(args) + " & echo. & pause"],
+                    cwd=str(cwd or script.parent),
+                    env=env,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+                )
+            except OSError as exc:
+                raise RestoreError(
+                    ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                    f"Не удалось запустить {script_name}.",
+                    details=str(exc),
+                ) from exc
+            return
+
+        # Prefer Python ports when present (list_purchases_dump.py, download_one.py).
+        py_name = script_name.replace("-", "_")
+        if py_name.endswith(".ps1"):
+            py_name = py_name[: -len(".ps1")] + ".py"
+        try:
+            py_script = self._resolve_tools_script(py_name)
+        except RestoreError:
             raise RestoreError(
                 ErrorCode.UNKNOWN_EXTERNAL_ERROR,
-                f"Не удалось запустить {script_name}.",
-                details=str(exc),
-            ) from exc
+                f"Для {script_name} на этой ОС нужен Python-порт ({py_name}).",
+            ) from None
+        argv = [sys.executable, str(py_script), *(extra_args or [])]
+        self._open_unix_terminal(argv)
 
     def versions_dump_path(self, destination_dir: str | Path, store_id: str) -> Path:
         return Path(destination_dir) / f"versions-{store_id}.json"
@@ -480,10 +563,11 @@ class AppStoreCliAdapter:
         dest = Path(destination_dir)
         dest.mkdir(parents=True, exist_ok=True)
         out_path = self.versions_dump_path(dest, sid)
-        self.begin_script_with_passphrase(
-            "list-versions-dump.ps1",
-            ["-AppId", sid, "-EnrichLimit", str(int(enrich_limit))],
-        )
+        if sys.platform == "win32":
+            extra = ["-AppId", sid, "-EnrichLimit", str(int(enrich_limit))]
+        else:
+            extra = ["--app-id", sid, "--enrich-limit", str(int(enrich_limit))]
+        self.begin_script_with_passphrase("list-versions-dump.ps1", extra)
         return out_path
 
     def load_versions_dump(self, path: str | Path) -> list[AppVersionInfo]:

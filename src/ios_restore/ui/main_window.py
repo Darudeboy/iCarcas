@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -61,6 +62,7 @@ from ios_restore.infrastructure.paths import default_tools_dir
 from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.ui.onboarding import ensure_onboarding, show_help_dialog
+from ios_restore.ui.release_notes import show_release_notes_dialog
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
 from ios_restore.ui.workers import (
@@ -268,6 +270,17 @@ class Chip(QLabel):
         repolish(self)
 
 
+def make_corner_button(text: str) -> QToolButton:
+    button = QToolButton()
+    button.setObjectName("cornerChip")
+    button.setText(text)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    button.setProperty("state", "idle")
+    return button
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -351,9 +364,27 @@ class MainWindow(QMainWindow):
 
         right = QVBoxLayout()
         right.setSpacing(6)
+        corner_row = QHBoxLayout()
+        corner_row.setSpacing(8)
+        corner_row.addStretch(1)
+        self.device_button = make_corner_button("iPhone…")
+        self.device_button.setToolTip("Найти устройство или возобновить подключение")
+        self._rebuild_device_menu()
+        self.session_button = make_corner_button("Войти…")
+        self.session_button.setToolTip("Сессия App Store: войти или возобновить")
+        self._device_ok = False
+        self._session_ok = False
+        self._session_label: str | None = None
+        self._rebuild_session_menu()
+        corner_row.addWidget(self.device_button)
+        corner_row.addWidget(self.session_button)
+        right.addLayout(corner_row)
         theme_row = QHBoxLayout()
         theme_row.setSpacing(0)
         theme_row.addStretch(1)
+        self.release_notes_button = make_button("Что нового", "ghost")
+        self.release_notes_button.setToolTip("Изменения с последнего релиза")
+        self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
         self.help_button = make_button("Справка", "ghost")
         self.help_button.setToolTip("Как пользоваться — кратко по шагам и кнопкам")
         self.help_button.clicked.connect(lambda: show_help_dialog(self))
@@ -361,62 +392,38 @@ class MainWindow(QMainWindow):
         self.theme_button.setToolTip("Переключить светлую / тёмную тему")
         self.theme_button.clicked.connect(self._toggle_theme)
         self._refresh_theme_button()
+        theme_row.addWidget(self.release_notes_button)
         theme_row.addWidget(self.help_button)
         theme_row.addWidget(self.theme_button)
         right.addLayout(theme_row)
-        self.chip_device = Chip("iPhone не найден")
-        self.chip_session = Chip("Нет сессии App Store")
-        right.addWidget(self.chip_device, 0, Qt.AlignmentFlag.AlignRight)
-        right.addWidget(self.chip_session, 0, Qt.AlignmentFlag.AlignRight)
         header.addLayout(right)
         root.addLayout(header)
 
-        self.card_device = Card("Устройство", step=1)
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.detect_button = make_button("Найти устройство")
-        self.detect_button.clicked.connect(self._on_detect)
-        self.pair_button = make_button("Установить доверие")
-        self.pair_button.clicked.connect(self._on_pair)
-        row.addWidget(self.detect_button, 1)
-        row.addWidget(self.pair_button, 1)
-        self.card_device.body.addLayout(row)
-        self.card_device.set_state("active")
-        root.addWidget(self.card_device)
-
-        self.card_store = Card("App Store", step=2)
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.login_button = make_button("Войти…")
-        self.login_button.clicked.connect(self._on_login)
-        self.login_button.setToolTip("Вход в Apple ID (пароль и 2FA — в консоли)")
-        self.auth_info_button = make_button("Проверить сессию…")
-        self.auth_info_button.clicked.connect(self._on_auth_info)
-        self.logout_button = make_button("Выйти…", "danger")
-        self.logout_button.clicked.connect(self._on_logout)
-        row.addWidget(self.login_button, 1)
-        row.addWidget(self.auth_info_button, 1)
-        row.addWidget(self.logout_button, 1)
-        self.card_store.body.addLayout(row)
-
-        pass_row = QHBoxLayout()
-        pass_row.setSpacing(10)
-        self.remember_pass_button = make_button("Запомнить ключ…")
-        self.remember_pass_button.setToolTip(
-            "Сохранить Keychain passphrase на этом ПК (не пароль Apple ID). "
-            "Подробнее — в Справке."
+        self.privacy_label = QLabel(
+            "Учётные данные и ключ сессии хранятся только на этом компьютере "
+            "и никуда не передаются."
         )
-        self.remember_pass_button.clicked.connect(self._on_save_passphrase)
-        self.clear_pass_button = make_button("Забыть ключ", "ghost")
-        self.clear_pass_button.clicked.connect(self._on_clear_passphrase)
-        pass_row.addWidget(self.remember_pass_button, 1)
-        pass_row.addWidget(self.clear_pass_button, 1)
-        self.card_store.body.addLayout(pass_row)
-        self.passphrase_chip = QLabel()
-        self.passphrase_chip.setObjectName("appSubtitle")
-        self._refresh_passphrase_label()
-        self.card_store.body.addWidget(self.passphrase_chip)
+        self.privacy_label.setObjectName("privacyNotice")
+        self.privacy_label.setWordWrap(True)
+        root.addWidget(self.privacy_label)
 
+        # Kept as aliases for older call sites / busy toggles (hidden, menu-driven).
+        self.detect_button = self.device_button
+        self.pair_button = self.device_button
+        self.login_button = self.session_button
+        self.auth_info_button = self.session_button
+        self.logout_button = self.session_button
+        self.remember_pass_button = self.session_button
+        self.clear_pass_button = self.session_button
+        self.chip_device = Chip("")
+        self.chip_session = Chip("")
+        self.chip_device.hide()
+        self.chip_session.hide()
+        self.passphrase_chip = QLabel()
+        self.passphrase_chip.hide()
+        self._refresh_passphrase_label()
+
+        self.card_store = Card("Поиск", step=1)
         archive_row = QHBoxLayout()
         archive_row.setSpacing(10)
         self.archive_button = make_button("Архив покупок…")
@@ -432,25 +439,36 @@ class MainWindow(QMainWindow):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Название, Store ID или bundle…")
         self.search_input.setClearButtonEnabled(True)
-        self.region_combo = QComboBox()
-        self.region_combo.setObjectName("regionCombo")
+        self._region_code = "RU"
+        self._region_tags: dict[str, QPushButton] = {}
+        region_row = QHBoxLayout()
+        region_row.setSpacing(6)
         for region in RegionalAppSearchService.known_regions():
-            self.region_combo.addItem(f"{region.name} ({region.code})", region.code)
-        ru_index = self.region_combo.findData("RU")
-        if ru_index >= 0:
-            self.region_combo.setCurrentIndex(ru_index)
+            tag = QPushButton(region.name)
+            tag.setObjectName("regionTag")
+            tag.setCursor(Qt.CursorShape.PointingHandCursor)
+            tag.setCheckable(False)
+            tag.setToolTip(f"Регион App Store: {region.name} ({region.code})")
+            tag.clicked.connect(
+                lambda _checked=False, code=region.code: self._select_region(code)
+            )
+            self._region_tags[region.code] = tag
+            region_row.addWidget(tag)
+        region_row.addStretch(1)
+        self._select_region("RU")
         self.regional_search_button = make_button("Найти ID…", "primary")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
         self.regional_search_button.setToolTip(
             "Найти Store ID. Скачивание — только при лицензии на аккаунте."
         )
         self.card_store.body.addWidget(self.search_input)
-        self.card_store.body.addWidget(self.region_combo)
+        self.card_store.body.addLayout(region_row)
         self.card_store.body.addWidget(self.regional_search_button)
+        self.card_store.set_state("active")
         root.addWidget(self.card_store)
         repolish(self.regional_search_button)
 
-        self.card_app = Card("Приложение", step=3)
+        self.card_app = Card("Приложение", step=2)
         self.app_input = QLineEdit()
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
@@ -548,12 +566,11 @@ class MainWindow(QMainWindow):
         self._download_last_bytes: int = 0
         self._download_last_bytes_at: float | None = None
         self._download_peak_bytes: int = 0
-        self._session_label: str | None = None
 
         help_card = Card("Справка")
         help_hint = QLabel(
-            "Кратко: устройство → войти → найти ID → скачать → установить. "
-            "Подробности и разбор кнопок — в справке."
+            "Кратко: в углу — iPhone и Войти → найти ID → скачать → установить. "
+            "Данные УЗ только локально. Подробности — в справке и «Что нового»."
         )
         help_hint.setWordWrap(True)
         help_hint.setObjectName("appSubtitle")
@@ -562,9 +579,14 @@ class MainWindow(QMainWindow):
         help_row.setSpacing(10)
         self.open_help_button = make_button("Как пользоваться…", "primary")
         self.open_help_button.clicked.connect(lambda: show_help_dialog(self))
+        self.open_release_notes_button = make_button("Что нового…", "ghost")
+        self.open_release_notes_button.clicked.connect(
+            lambda: show_release_notes_dialog(self)
+        )
         self.replay_onboarding_button = make_button("Повторить обучение", "ghost")
         self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
         help_row.addWidget(self.open_help_button, 1)
+        help_row.addWidget(self.open_release_notes_button, 1)
         help_row.addWidget(self.replay_onboarding_button, 1)
         help_card.body.addLayout(help_row)
         root.addWidget(help_card)
@@ -639,28 +661,70 @@ class MainWindow(QMainWindow):
     def log(self, text: str) -> None:
         self.output.appendPlainText(text)
 
+    def _rebuild_device_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction("Найти устройство", self._on_detect)
+        menu.addAction("Установить доверие", self._on_pair)
+        self.device_button.setMenu(menu)
+
+    def _rebuild_session_menu(self) -> None:
+        menu = QMenu(self)
+        if self._session_ok:
+            menu.addAction("Проверить сессию…", self._on_auth_info)
+            menu.addAction("Возобновить вход…", self._on_login)
+            menu.addSeparator()
+            menu.addAction("Запомнить ключ…", self._on_save_passphrase)
+            menu.addAction("Забыть ключ", self._on_clear_passphrase)
+            menu.addSeparator()
+            menu.addAction("Выйти…", self._on_logout)
+        else:
+            menu.addAction("Войти…", self._on_login)
+            menu.addAction("Проверить сессию…", self._on_auth_info)
+            menu.addSeparator()
+            menu.addAction("Запомнить ключ…", self._on_save_passphrase)
+            menu.addAction("Забыть ключ", self._on_clear_passphrase)
+        self.session_button.setMenu(menu)
+
+    def _paint_device_corner(self, *, state: str, text: str) -> None:
+        self.device_button.setText(text)
+        self.device_button.setProperty("state", state)
+        repolish(self.device_button)
+
+    def set_device_working(self, text: str) -> None:
+        """Green highlight while detecting / pairing."""
+        self._paint_device_corner(state="busy", text=text)
+
     def set_device_chip(self, found: bool, name: str = "") -> None:
-        self.chip_device.set_state(
-            found,
-            name or ("iPhone подключён" if found else "iPhone не найден"),
-        )
-        self.card_device.set_state(
-            "done" if found else "active",
-            "Готово" if found else "",
-        )
+        self._device_ok = found
+        if found and name:
+            label = name if len(name) <= 22 else name[:20] + "…"
+        elif found:
+            label = "iPhone OK"
+        else:
+            label = "iPhone…"
+        self._paint_device_corner(state="ok" if found else "idle", text=label)
+        self.chip_device.set_state(found, label)
         if found:
             self.card_store.set_state("active")
 
     def set_session_chip(self, ok: bool, detail: str | None = None) -> None:
         if detail:
             self._session_label = detail
-        label = self._session_label or (
-            "Сессия App Store активна" if ok else "Нет сессии App Store"
-        )
         if not ok:
             self._session_label = None
-            label = "Нет сессии App Store"
+        self._session_ok = ok
+        if ok:
+            label = self._session_label or "Сессия OK"
+            if len(label) > 24:
+                label = label[:22] + "…"
+        else:
+            label = "Войти…"
+        self.session_button.setText(label)
+        self.session_button.setProperty("state", "ok" if ok else "idle")
+        repolish(self.session_button)
         self.chip_session.set_state(ok, label)
+        self._rebuild_session_menu()
+        self._refresh_passphrase_label()
         self.card_store.set_state(
             "done" if ok else "active",
             "Готово" if ok else "",
@@ -700,9 +764,22 @@ class MainWindow(QMainWindow):
 
     def _refresh_passphrase_label(self) -> None:
         if kc_pass.has_stored_passphrase():
+            tip = (
+                "Ключ сессии сохранён локально на этом компьютере "
+                "(не пароль Apple ID, никуда не отправляется)."
+            )
             self.passphrase_chip.setText("Ключ сохранён на этом ПК.")
         else:
+            tip = (
+                "Ключ сессии не сохранён — консоль спросит при необходимости. "
+                "УЗ и ключ никуда не передаются."
+            )
             self.passphrase_chip.setText("Ключ не сохранён — при необходимости спросит консоль.")
+        if hasattr(self, "session_button"):
+            base = self.session_button.toolTip().split("\n")[0]
+            if not base:
+                base = "Сессия App Store"
+            self.session_button.setToolTip(f"{base}\n{tip}")
 
     def _on_save_passphrase(self) -> None:
         if not self._require_tos():
@@ -711,7 +788,7 @@ class MainWindow(QMainWindow):
             self,
             "Запомнить ключ",
             "Введите Keychain passphrase\n"
-            "(НЕ пароль Apple ID). Сохранится только на этом ПК:",
+            "(НЕ пароль Apple ID). Только локально на этом ПК, никуда не отправляется:",
             QLineEdit.EchoMode.Password,
         )
         if not ok or not text.strip():
@@ -1135,10 +1212,11 @@ class MainWindow(QMainWindow):
     def _on_detect(self) -> None:
         if self._busy:
             return
+        self.set_device_working("Поиск…")
         self._set_busy(True, "Поиск устройств…")
         worker = DetectDevicesWorker(self._device_adapter)
         worker.signals.finished.connect(self._on_devices_found)
-        worker.signals.failed.connect(self._on_worker_failed)
+        worker.signals.failed.connect(self._on_device_worker_failed)
         self._thread_pool.start(worker)
 
     def _on_pair(self) -> None:
@@ -1153,10 +1231,11 @@ class MainWindow(QMainWindow):
             "Доверие",
             "Разблокируйте iPhone и при запросе нажмите «Доверять».",
         )
+        self.set_device_working("Связь…")
         self._set_busy(True, f"Установка доверия для {device.device_id}…")
         worker = PairDeviceWorker(self._device_adapter, device.device_id)
         worker.signals.finished.connect(self._on_paired)
-        worker.signals.failed.connect(self._on_worker_failed)
+        worker.signals.failed.connect(self._on_device_worker_failed)
         self._thread_pool.start(worker)
 
     def _on_login(self) -> None:
@@ -1445,7 +1524,7 @@ class MainWindow(QMainWindow):
         if not term:
             QMessageBox.information(self, "Поиск", "Введите название приложения для поиска.")
             return
-        region_code = self.region_combo.currentData()
+        region_code = self._region_code
         if not region_code:
             QMessageBox.information(self, "Поиск", "Выберите регион App Store.")
             return
@@ -1455,10 +1534,17 @@ class MainWindow(QMainWindow):
         worker.signals.failed.connect(self._on_worker_failed)
         self._thread_pool.start(worker)
 
+    def _select_region(self, code: str) -> None:
+        self._region_code = code
+        for tag_code, tag in self._region_tags.items():
+            selected = tag_code == code
+            tag.setProperty("state", "ok" if selected else "idle")
+            repolish(tag)
+
     def _on_regional_search_results(self, results: object) -> None:
         assert isinstance(results, list)
         self._set_busy(False)
-        region_code = self.region_combo.currentData()
+        region_code = self._region_code
         if not results:
             QMessageBox.information(
                 self,
@@ -2305,6 +2391,13 @@ class MainWindow(QMainWindow):
             "Откройте приложение на iPhone."
         )
 
+    def _on_device_worker_failed(self, message: str) -> None:
+        name = ""
+        if self._devices:
+            name = self._devices[0].display_name
+        self.set_device_chip(self._device_ok and bool(self._devices), name)
+        self._on_worker_failed(message)
+
     def _on_worker_failed(self, message: str) -> None:
         self._set_busy(False)
         if "PURCHASES_FETCH_FAILED" in message:
@@ -2331,11 +2424,8 @@ class MainWindow(QMainWindow):
         self._busy = busy
         session_ok = self._appstore.session_files_present()
         for btn in (
-            self.detect_button,
-            self.pair_button,
-            self.login_button,
-            self.auth_info_button,
-            self.logout_button,
+            self.device_button,
+            self.session_button,
             self.download_button,
             self.pickup_button,
             self.history_button,
@@ -2346,11 +2436,12 @@ class MainWindow(QMainWindow):
             self.archive_button,
             self.pickup_archive_button,
             self.regional_search_button,
-            self.remember_pass_button,
-            self.clear_pass_button,
+            *self._region_tags.values(),
             self.diag_button,
             self.help_button,
+            self.release_notes_button,
             self.open_help_button,
+            self.open_release_notes_button,
             self.replay_onboarding_button,
         ):
             if btn is self.install_button:
