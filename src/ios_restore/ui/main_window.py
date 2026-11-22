@@ -334,7 +334,8 @@ class MainWindow(QMainWindow):
         scroll.setObjectName("mainScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Keep content within the viewport — horizontal scroll made the right edge look "eaten".
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         shell_layout.addWidget(scroll)
 
@@ -366,17 +367,14 @@ class MainWindow(QMainWindow):
         self._refresh_title()
         sub = QLabel("Восстановление своих приложений на iOS (iPhone / iPad)")
         sub.setObjectName("appSubtitle")
+        sub.setWordWrap(True)
         titles.addWidget(self.title_label)
         titles.addWidget(sub)
-        brand_row.addLayout(titles)
-        header.addLayout(brand_row)
-        header.addStretch(1)
+        brand_row.addLayout(titles, 1)
+        header.addLayout(brand_row, 1)
 
-        right = QVBoxLayout()
-        right.setSpacing(6)
         corner_row = QHBoxLayout()
         corner_row.setSpacing(8)
-        corner_row.addStretch(1)
         self.device_button = make_corner_button("iOS…")
         self.device_button.setToolTip("Найти iPhone / iPad или возобновить подключение")
         self._rebuild_device_menu()
@@ -388,26 +386,46 @@ class MainWindow(QMainWindow):
         self._rebuild_session_menu()
         corner_row.addWidget(self.device_button)
         corner_row.addWidget(self.session_button)
-        right.addLayout(corner_row)
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(0)
-        theme_row.addStretch(1)
-        self.release_notes_button = make_button("Что нового", "ghost")
+        header.addLayout(corner_row)
+        root.addLayout(header)
+
+        # Full-width nav — do not pack under iOS/session chips (that ate the right edge).
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(8)
+        self.open_setup_button = make_button("Впервые здесь?", "header")
+        self.open_setup_button.setProperty("emphasis", "1")
+        repolish(self.open_setup_button)
+        self.open_setup_button.setToolTip(
+            "Первая установка: что поставить, чтобы увидеть iPhone/iPad"
+        )
+        self.open_setup_button.clicked.connect(lambda: show_setup_dialog(self))
+        self.release_notes_button = make_button("Что нового", "header")
         self.release_notes_button.setToolTip("Изменения с последнего релиза")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
-        self.help_button = make_button("Справка", "ghost")
-        self.help_button.setToolTip("Как пользоваться — кратко по шагам и кнопкам")
+        self.help_button = make_button("Справка", "header")
+        self.help_button.setToolTip("Как пользоваться — кратко по шагам")
         self.help_button.clicked.connect(lambda: show_help_dialog(self))
-        self.theme_button = make_button("", "ghost")
+        self.replay_onboarding_button = make_button("Обучение", "header")
+        self.replay_onboarding_button.setToolTip("Повторить знакомство при старте")
+        self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
+        self.theme_button = make_button("", "header")
         self.theme_button.setToolTip("Переключить светлую / тёмную тему")
         self.theme_button.clicked.connect(self._toggle_theme)
         self._refresh_theme_button()
-        theme_row.addWidget(self.release_notes_button)
-        theme_row.addWidget(self.help_button)
-        theme_row.addWidget(self.theme_button)
-        right.addLayout(theme_row)
-        header.addLayout(right)
-        root.addLayout(header)
+        # Aliases: old help-card buttons removed (they duplicated this nav row).
+        self.open_help_button = self.help_button
+        self.open_release_notes_button = self.release_notes_button
+        for btn in (
+            self.open_setup_button,
+            self.release_notes_button,
+            self.help_button,
+            self.replay_onboarding_button,
+            self.theme_button,
+        ):
+            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            nav_row.addWidget(btn)
+        nav_row.addStretch(1)
+        root.addLayout(nav_row)
 
         self.privacy_label = QLabel(
             "Учётные данные и ключ сессии хранятся только на этом компьютере "
@@ -501,12 +519,12 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(self._on_download)
         self.pickup_button = make_button("Подхватить IPA")
         self.pickup_button.clicked.connect(self._on_pickup_ipa)
-        self.history_button = make_button("История…", "ghost")
+        self.history_button = make_button("История…")
         self.history_button.setToolTip("Последние скачивания и установки")
         self.history_button.clicked.connect(self._on_open_history)
         row.addWidget(self.download_button, 1)
         row.addWidget(self.pickup_button, 1)
-        row.addWidget(self.history_button, 0)
+        row.addWidget(self.history_button, 1)
         self.card_app.body.addLayout(row)
         versions_row = QHBoxLayout()
         versions_row.setSpacing(10)
@@ -579,31 +597,6 @@ class MainWindow(QMainWindow):
         self._download_last_bytes_at: float | None = None
         self._download_peak_bytes: int = 0
 
-        help_card = Card("Справка")
-        self.open_setup_button = make_button("Новый ПК…", "ghost")
-        self.open_setup_button.setToolTip(
-            "Python, tools/libimobiledevice и Apple Mobile Device Support"
-        )
-        self.open_setup_button.clicked.connect(lambda: show_setup_dialog(self))
-        help_head = help_card.layout().itemAt(0).layout()
-        assert isinstance(help_head, QHBoxLayout)
-        help_head.insertWidget(2, self.open_setup_button)
-        help_row = QHBoxLayout()
-        help_row.setSpacing(10)
-        self.open_help_button = make_button("Как пользоваться…", "primary")
-        self.open_help_button.clicked.connect(lambda: show_help_dialog(self))
-        self.open_release_notes_button = make_button("Что нового…", "ghost")
-        self.open_release_notes_button.clicked.connect(
-            lambda: show_release_notes_dialog(self)
-        )
-        self.replay_onboarding_button = make_button("Повторить обучение", "ghost")
-        self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
-        help_row.addWidget(self.open_help_button, 1)
-        help_row.addWidget(self.open_release_notes_button, 1)
-        help_row.addWidget(self.replay_onboarding_button, 1)
-        help_card.body.addLayout(help_row)
-        root.addWidget(help_card)
-
         log_card = Card("Журнал")
         self.btn_clear_log = make_button("Очистить", "ghost")
         head_layout = log_card.layout().itemAt(0).layout()
@@ -653,10 +646,11 @@ class MainWindow(QMainWindow):
         self.brand_mark.show()
 
     def _refresh_theme_button(self) -> None:
+        # Short label — long "Тёмная тема" was clipped in the header.
         if self._mode == "dark":
-            self.theme_button.setText("Светлая тема")
+            self.theme_button.setText("Светлая")
         else:
-            self.theme_button.setText("Тёмная тема")
+            self.theme_button.setText("Тёмная")
 
     def _toggle_theme(self) -> None:
         self.apply_theme("light" if self._mode == "dark" else "dark")

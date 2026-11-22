@@ -1,37 +1,22 @@
-# Первый запуск на новом ПК
+# Если что-то не работает
 
-Краткий чеклист для GitHub / GitVerse: что нужно поставить вручную и какие сбои типичны.
+## Чеклист нового ПК
 
-## Зависимости (не приезжают с `git clone`)
+1. Python **3.12+** (не 3.9 / не Store)
+2. Команды из **корня** репозитория (`pyproject.toml` рядом)
+3. `pip install -e ".[dev]"`
+4. Файлы в `tools\libimobiledevice\` + `ipatool.exe`
+5. `winget install --id Apple.AppleMobileDeviceSupport -e`
+6. `.\scripts\check-tools.ps1` — всё OK
+7. Кабель, экран разблокирован, нажали **«Доверять»**
 
-| Что | Зачем | Как получить |
-|-----|--------|--------------|
-| Python **3.12–3.13** | сам iCarcas (`requires-python`) | [python.org](https://www.python.org/downloads/), не Microsoft Store |
-| `tools/libimobiledevice/*.exe` | поиск устройства, Trust, установка IPA | community suite + `ipatool` (см. README) |
-| **Apple Mobile Device Support** (Windows) | USB / usbmuxd для iPhone и iPad | `winget install --id Apple.AppleMobileDeviceSupport -e` |
+## Частые проблемы
 
-Каталог `tools/libimobiledevice/` в `.gitignore`. Пока `.\scripts\check-tools.ps1` не пишет «Все CLI на месте», кнопки устройства и install не заработают — даже если Windows уже показывает iPad в проводнике.
+| Что видите | Что сделать |
+|------------|-------------|
+| Нет `pyproject.toml` / `ios_restore` | Открыть папку iCarcas, заново `pip install -e ".[dev]"` |
+| Устройство в Windows есть, в iCarcas нет | Шаги 4–5 выше (CLI + драйверы Apple) |
+| «Нужно доверие» / Password protected | Разблокировать экран, «Доверять», снова **Найти устройство** |
+| `license is required` | Приложения нет на этом Apple ID — поиск ID сам по себе не даёт скачать |
 
-## Порядок
-
-1. Клонировать репозиторий, открыть **корень** (есть `pyproject.toml`).
-2. Создать `.venv` на Python 3.12+, `pip install -e ".[dev]"`.
-3. Распаковать libimobiledevice suite + положить `ipatool.exe` в `tools\libimobiledevice\`.
-4. Установить Apple Mobile Device Support; служба должна быть Running.
-5. Кабель → разблокировать iPhone/iPad → «Доверять» → в UI **iOS… → Найти устройство**.
-
-## Типичные проблемы
-
-| Симптом | Причина |
-|---------|---------|
-| `neither 'setup.py' nor 'pyproject.toml' found` | команды из родительской папки, не из корня репо |
-| `No module named 'ios_restore'` / `PySide6` | пакет не установлен в venv (`pip install -e ".[dev]"`) |
-| Python 3.9 / 3.11 | версия ниже 3.12 — поставьте 3.12+ |
-| Устройство «не видно» в iCarcas, но есть в Windows | нет CLI в `tools/libimobiledevice` и/или нет Apple Mobile Device Support |
-| `Password protected` / «нужно доверие» | экран заблокирован или не нажали «Доверять» |
-| `idevice_id` пустой после установки драйверов | переподключить кабель, перезапустить Apple Mobile Device Service, снова «Найти устройство» |
-
-## Что не является багом UI
-
-- Большое пустое поле на первой странице «Знакомство» — это текст онбординга, не splash.
-- Splash со слоями идёт **до** главного окна; знакомство открывается уже после него.
+Ссылки на файлы: README → разделы «Инструменты для телефона» и «Запуск».

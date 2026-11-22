@@ -4,11 +4,12 @@
 
 Кнопки и метки получают вид через objectName и динамические свойства:
     QPushButton            -> обычная кнопка
-    setProperty("variant", "primary" | "danger" | "ghost")
+    setProperty("variant", "primary" | "danger" | "ghost" | "header")
     QFrame#card            -> карточка
     QLabel#stepBadge       -> кружок шага, property state = idle | active | done
     QLabel#chip            -> плашка статуса, property state = idle | ok
     QToolButton#cornerChip -> угол: iOS / сессия
+    QPushButton[variant=header] -> компактные кнопки в шапке
     QLabel#privacyNotice   -> локальное хранение УЗ
     QPlainTextEdit#log     -> журнал
 """
@@ -173,6 +174,32 @@ QPushButton[variant="danger"]:hover { background: $danger_bg; border-color: $dan
 
 QPushButton[variant="ghost"] { background: transparent; border-color: transparent; color: $muted; padding: 6px 10px; }
 QPushButton[variant="ghost"]:hover { background: $hover; color: $text; }
+
+QPushButton[variant="header"] {
+    background: $surface;
+    color: $text;
+    border: 1px solid $border_strong;
+    border-radius: 10px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 0;
+}
+QPushButton[variant="header"]:hover {
+    background: $hover;
+    border-color: $accent;
+    color: $text;
+}
+QPushButton[variant="header"][emphasis="1"] {
+    background: $accent_dim;
+    color: $text;
+    border-color: $accent;
+}
+QPushButton[variant="header"][emphasis="1"]:hover {
+    background: $accent;
+    color: $accent_text;
+    border-color: $accent;
+}
 
 /* ---------- Поля ввода ---------- */
 QLineEdit {

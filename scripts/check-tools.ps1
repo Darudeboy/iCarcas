@@ -1,4 +1,4 @@
-﻿# Verify local ipatool / libimobiledevice binaries for personal portable use.
+﻿# Check that ipatool / libimobiledevice are present for iCarcas.
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -14,19 +14,19 @@ $needed = @(
 
 function Write-SetupHints {
     Write-Host ""
-    Write-Host "These files are NOT in git clone (tools/libimobiledevice is gitignored)."
-    Write-Host "1) libimobiledevice Windows suite:"
+    Write-Host "These tools are NOT in git. Do this:"
+    Write-Host "1) Download libimobiledevice suite, unpack into:"
+    Write-Host "   $tools"
     Write-Host "   https://github.com/L1ghtmann/libimobiledevice/releases/tag/suite-exe-21d57a9"
-    Write-Host "   Unpack exe+dll into: $tools"
-    Write-Host "2) ipatool (Windows amd64) as $tools\ipatool.exe"
+    Write-Host "2) Put ipatool.exe there too:"
     Write-Host "   https://github.com/majd/ipatool/releases"
-    Write-Host "3) Windows: Apple Mobile Device Support"
+    Write-Host "3) Install Apple drivers:"
     Write-Host "   winget install --id Apple.AppleMobileDeviceSupport -e"
-    Write-Host "See docs\setup.md and README.md"
+    Write-Host "See README.md"
 }
 
 if (-not (Test-Path $tools)) {
-    Write-Host "Missing directory tools\libimobiledevice"
+    Write-Host "Missing folder: tools\libimobiledevice"
     Write-SetupHints
     exit 1
 }
@@ -56,7 +56,7 @@ if ($null -eq $amds) {
     Write-Host "Warning: Apple Mobile Device Service not found."
     Write-Host "Install: winget install --id Apple.AppleMobileDeviceSupport -e"
 } elseif ($amds.Status -ne 'Running') {
-    Write-Host "Warning: Apple Mobile Device Service status=$($amds.Status) (expected Running)."
+    Write-Host "Warning: Apple Mobile Device Service is $($amds.Status) (need Running)."
 } else {
     Write-Host "OK  Apple Mobile Device Service"
 }
