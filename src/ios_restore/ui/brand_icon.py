@@ -127,10 +127,11 @@ def _paint_stack(painter: QPainter, rect: QRectF, *, progress: float) -> None:
     half_w = w * 0.38
     half_h = h * 0.30  # a bit flatter than a pure square diamond
 
-    glow_alpha = int(100 * t)
+    # Soft aqua pool under the stack — matches brand PNG / Ink+Aqua UI.
+    glow_alpha = int(70 * t)
     glow = QRadialGradient(QPointF(cx, cy + half_h * 0.9), max(w, h) * 0.48)
-    glow.setColorAt(0.0, QColor(47, 145, 255, glow_alpha))
-    glow.setColorAt(0.55, QColor(30, 100, 220, int(glow_alpha * 0.35)))
+    glow.setColorAt(0.0, QColor(46, 196, 182, glow_alpha))
+    glow.setColorAt(0.55, QColor(13, 148, 136, int(glow_alpha * 0.35)))
     glow.setColorAt(1.0, QColor(0, 0, 0, 0))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(glow)
@@ -166,9 +167,9 @@ def _paint_stack(painter: QPainter, rect: QRectF, *, progress: float) -> None:
         lh = half_h * scale
         alpha = int(255 * (0.25 + 0.75 * local_e))
 
-        # Thickness slab (isometric: slightly down).
+        # Thickness slab (isometric: slightly down) — deep teal edge.
         side = _layer_path(cx, layer_cy + thickness, lw, lh)
-        painter.setBrush(QColor(18, 65, 165, int(alpha * 0.85)))
+        painter.setBrush(QColor(8, 72, 68, int(alpha * 0.9)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(side)
 
@@ -178,19 +179,20 @@ def _paint_stack(painter: QPainter, rect: QRectF, *, progress: float) -> None:
             QPointF(cx + lw, layer_cy + lh),
         )
         if i == 2:
-            grad.setColorAt(0.0, QColor(140, 210, 255, alpha))
-            grad.setColorAt(0.4, QColor(70, 165, 255, alpha))
-            grad.setColorAt(1.0, QColor(30, 100, 230, alpha))
+            # Top: mint / aqua (brand tip)
+            grad.setColorAt(0.0, QColor(180, 255, 235, alpha))
+            grad.setColorAt(0.4, QColor(94, 234, 212, alpha))
+            grad.setColorAt(1.0, QColor(20, 160, 145, alpha))
         elif i == 1:
-            grad.setColorAt(0.0, QColor(105, 185, 255, alpha))
-            grad.setColorAt(1.0, QColor(35, 105, 225, alpha))
+            grad.setColorAt(0.0, QColor(90, 220, 205, alpha))
+            grad.setColorAt(1.0, QColor(15, 130, 120, alpha))
         else:
-            grad.setColorAt(0.0, QColor(85, 165, 250, alpha))
-            grad.setColorAt(1.0, QColor(28, 90, 205, alpha))
+            grad.setColorAt(0.0, QColor(46, 196, 182, alpha))
+            grad.setColorAt(1.0, QColor(12, 100, 95, alpha))
 
         painter.setBrush(grad)
         painter.setPen(
-            QPen(QColor(200, 230, 255, int(70 * local_e)), max(1.2, w * 0.007))
+            QPen(QColor(200, 255, 240, int(65 * local_e)), max(1.2, w * 0.007))
         )
         painter.drawPath(face)
 
@@ -265,9 +267,10 @@ class BrandSplash(QWidget):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.SplashScreen
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        bg = "#0F1117" if mode == "dark" else "#F3F4F8"
-        fg = "#E8EAF0" if mode == "dark" else "#171A22"
-        muted = "#8B93A5" if mode == "dark" else "#6B7385"
+        from ios_restore.ui.theme import PALETTES
+
+        p = PALETTES["dark" if mode == "dark" else "light"]
+        bg, fg, muted, accent = p["bg"], p["text"], p["muted"], p["accent"]
         self.setStyleSheet(f"BrandSplash {{ background: {bg}; }}")
         self.setFixedSize(520, 480)
 
@@ -279,10 +282,15 @@ class BrandSplash(QWidget):
         self.logo = StackingLogoWidget(self, width=280, height=230)
         layout.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        title = QLabel("iCarcas")
+        title = QLabel()
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(
-            f"color: {fg}; font-size: 26px; font-weight: 700; letter-spacing: 0.6px;"
+        title.setTextFormat(Qt.TextFormat.RichText)
+        title.setText(
+            f'<span style="font-family:\'Segoe UI Variable Display\',\'Bahnschrift SemiBold\','
+            f'\'Segoe UI Semibold\',sans-serif; font-size:28px; font-weight:700;'
+            f' letter-spacing:-0.3px;">'
+            f'<span style="color:{accent}">i</span>'
+            f'<span style="color:{fg}">Carcas</span></span>'
         )
         layout.addWidget(title)
 

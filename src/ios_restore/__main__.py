@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QApplication
 
     from ios_restore.ui.main_window import MainWindow
-    from ios_restore.ui.theme import PALETTES, build_stylesheet
+    from ios_restore.ui.theme import PALETTES, build_palette, build_stylesheet
 
     settings = QSettings("iCarcas", "iCarcas")
     if "--light" in argv:
@@ -35,26 +35,15 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("iCarcas")
     app.setOrganizationName("iCarcas")
-    # Fusion даёт предсказуемую стилизацию диалогов в тёмной теме Windows
+    # Fusion + matching palette: QMessageBox/QMenu follow theme (no white-on-white)
     app.setStyle("Fusion")
-    # Светлая палитра приложения — чтобы модальные диалоги были читаемыми
-    from PySide6.QtGui import QColor, QPalette
 
     from ios_restore.ui.brand_icon import BrandSplash, load_app_icon
 
     app_icon = load_app_icon()
     app.setWindowIcon(app_icon)
 
-    _pal = QPalette()
-    _pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
-    _pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
-    _pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-    _pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
-    _pal.setColor(QPalette.ColorRole.Button, QColor("#e0e0e0"))
-    _pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
-    _pal.setColor(QPalette.ColorRole.Highlight, QColor("#0078d7"))
-    _pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-    app.setPalette(_pal)
+    app.setPalette(build_palette(mode))
     app.setStyleSheet(build_stylesheet(mode))
 
     window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)

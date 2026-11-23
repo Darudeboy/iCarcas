@@ -69,7 +69,7 @@ from ios_restore.ui.onboarding import (
     show_help_dialog,
 )
 from ios_restore.ui.release_notes import show_release_notes_dialog
-from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
+from ios_restore.ui.theme import PALETTES, build_palette, build_stylesheet, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
 from ios_restore.ui.workers import (
     AuthInfoWorker,
@@ -80,34 +80,37 @@ from ios_restore.ui.workers import (
     RegionalSearchAppWorker,
 )
 
-_DIALOG_QSS = (
-    "* { background-color: #ffffff; color: #000000; }"
-    "QTableWidget { background-color: #ffffff; color: #000000; gridline-color: #cccccc; }"
-    "QTableWidget::item { background-color: #ffffff; color: #000000; padding: 4px; }"
-    "QTableWidget::item:selected { background-color: #0078d7; color: #ffffff; }"
-    "QHeaderView::section { background-color: #f0f0f0; color: #000000;"
-    " border: 1px solid #cccccc; padding: 4px; }"
-    "QPushButton { background-color: #e0e0e0; color: #000000;"
-    " border: 1px solid #999999; padding: 6px 12px; }"
-    "QPushButton:hover { background-color: #d0d0d0; }"
-    "QCheckBox { color: #000000; }"
-    "QLabel { color: #000000; }"
-    "QLabel#selectionDetail { background-color: #f7f7f7; border: 1px solid #cccccc;"
-    " padding: 8px; }"
-)
+def _dialog_qss(mode: str) -> str:
+    """Modal table dialogs follow the active theme (no forced Windows-white)."""
+    p = PALETTES[mode if mode in PALETTES else "dark"]
+    return (
+        f"* {{ background-color: {p['surface']}; color: {p['text']}; }}"
+        f"QTableWidget {{ background-color: {p['surface2']}; color: {p['text']};"
+        f" gridline-color: {p['border']}; border: 1px solid {p['border']};"
+        f" border-radius: 10px; }}"
+        f"QTableWidget::item {{ background-color: {p['surface2']}; color: {p['text']};"
+        f" padding: 6px; }}"
+        f"QTableWidget::item:selected {{ background-color: {p['accent']};"
+        f" color: {p['accent_text']}; }}"
+        f"QHeaderView::section {{ background-color: {p['surface']}; color: {p['muted']};"
+        f" border: 1px solid {p['border']}; padding: 6px 8px; font-weight: 600; }}"
+        f"QPushButton {{ background-color: {p['surface2']}; color: {p['text']};"
+        f" border: 1px solid {p['border_strong']}; border-radius: 9px; padding: 8px 14px; }}"
+        f"QPushButton:hover {{ background-color: {p['hover']}; border-color: {p['accent']}; }}"
+        f"QCheckBox {{ color: {p['text']}; }}"
+        f"QLabel {{ color: {p['text']}; }}"
+        f"QLabel#selectionDetail {{ background-color: {p['surface2']};"
+        f" border: 1px solid {p['border']}; border-radius: 10px; padding: 10px; }}"
+        f"QLineEdit {{ background-color: {p['surface2']}; color: {p['text']};"
+        f" border: 1px solid {p['border']}; border-radius: 9px; padding: 8px 10px; }}"
+    )
+
 
 _EMPTY_CELL = "—"
 
 
-def _light_dialog_palette() -> QPalette:
-    pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
-    pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
-    pal.setColor(QPalette.ColorRole.Button, QColor("#e0e0e0"))
-    pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
-    return pal
+def _dialog_palette(mode: str) -> QPalette:
+    return build_palette(mode if mode in PALETTES else "dark")
 
 
 def _cell_text(value: str | None) -> str:
@@ -125,8 +128,7 @@ def _fill_table_row(
     for col_idx, value in enumerate(values):
         text = _cell_text(value)
         item = QTableWidgetItem(text)
-        item.setForeground(QColor("#000000"))
-        item.setBackground(QColor("#ffffff"))
+        # Let dialog QSS / palette drive colors (no forced black-on-white).
         item.setToolTip(text)
         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         if col_idx == 0 and data_index is not None:
@@ -224,7 +226,7 @@ class Card(QFrame):
         self._step = step
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 18, 20, 20)
+        outer.setContentsMargins(22, 18, 22, 20)
         outer.setSpacing(14)
 
         head = QHBoxLayout()
@@ -346,27 +348,27 @@ class MainWindow(QMainWindow):
         scroll.setWidget(central)
 
         root = QVBoxLayout(central)
-        root.setContentsMargins(28, 26, 28, 26)
-        root.setSpacing(16)
+        root.setContentsMargins(32, 28, 32, 28)
+        root.setSpacing(18)
 
         header = QHBoxLayout()
         brand_row = QHBoxLayout()
-        brand_row.setSpacing(12)
-        self.brand_mark = StackingLogoWidget(self, size=44)
+        brand_row.setSpacing(14)
+        self.brand_mark = StackingLogoWidget(self, size=52)
         self.brand_mark.set_progress(1.0)
         brand_row.addWidget(self.brand_mark, 0, Qt.AlignmentFlag.AlignVCenter)
         # Transparent PNG mark (no black plate) — works on light and dark.
         self.brand_raster = QLabel()
-        self.brand_raster.setFixedSize(44, 44)
+        self.brand_raster.setFixedSize(52, 52)
         brand_row.addWidget(self.brand_raster, 0, Qt.AlignmentFlag.AlignVCenter)
         self._refresh_brand_mark()
         titles = QVBoxLayout()
-        titles.setSpacing(2)
+        titles.setSpacing(3)
         self.title_label = QLabel()
         self.title_label.setObjectName("appTitle")
         self.title_label.setTextFormat(Qt.TextFormat.RichText)
         self._refresh_title()
-        sub = QLabel("Восстановление своих приложений на iOS (iPhone / iPad)")
+        sub = QLabel("Восстановление своих приложений на iOS")
         sub.setObjectName("appSubtitle")
         sub.setWordWrap(True)
         titles.addWidget(self.title_label)
@@ -375,7 +377,7 @@ class MainWindow(QMainWindow):
         header.addLayout(brand_row, 1)
 
         corner_row = QHBoxLayout()
-        corner_row.setSpacing(8)
+        corner_row.setSpacing(10)
         self.device_button = make_corner_button("iOS…")
         self.device_button.setToolTip("Найти iPhone / iPad или возобновить подключение")
         self._rebuild_device_menu()
@@ -633,8 +635,8 @@ class MainWindow(QMainWindow):
         png = icon_png_path(transparent=True)
         if png.is_file():
             pix = QPixmap(str(png)).scaled(
-                44,
-                44,
+                52,
+                52,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -662,6 +664,7 @@ class MainWindow(QMainWindow):
         self._mode = mode
         app = QApplication.instance()
         if app is not None:
+            app.setPalette(build_palette(mode))
             app.setStyleSheet(build_stylesheet(mode))
         self._refresh_title()
         self._refresh_theme_button()
@@ -1451,7 +1454,7 @@ class MainWindow(QMainWindow):
         entry = show_history_dialog(
             self,
             entries=entries,
-            dialog_qss=_DIALOG_QSS,
+            dialog_qss=_dialog_qss(self._mode),
         )
         if entry is None or not entry.ipa_path:
             return
@@ -1467,8 +1470,8 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(f"Архив покупок ({len(purchases)})")
         dialog.resize(980, 560)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        dialog.setStyleSheet(_DIALOG_QSS)
-        pal = _light_dialog_palette()
+        dialog.setStyleSheet(_dialog_qss(self._mode))
+        pal = _dialog_palette(self._mode)
         dialog.setPalette(pal)
 
         layout = QVBoxLayout(dialog)
@@ -1617,8 +1620,8 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(f"Поиск ID ({region_code}) — {len(results)}")
         dialog.resize(1080, 680)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        dialog.setStyleSheet(_DIALOG_QSS)
-        pal = _light_dialog_palette()
+        dialog.setStyleSheet(_dialog_qss(self._mode))
+        pal = _dialog_palette(self._mode)
         dialog.setPalette(pal)
 
         layout = QVBoxLayout(dialog)
@@ -1946,8 +1949,8 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(f"Версии ({store_id}) — {len(versions)}")
         dialog.resize(900, 560)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        dialog.setStyleSheet(_DIALOG_QSS)
-        pal = _light_dialog_palette()
+        dialog.setStyleSheet(_dialog_qss(self._mode))
+        pal = _dialog_palette(self._mode)
         dialog.setPalette(pal)
 
         layout = QVBoxLayout(dialog)
@@ -2033,8 +2036,8 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(f"Каталог ID ({len(apps)})")
         dialog.resize(980, 620)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        dialog.setStyleSheet(_DIALOG_QSS)
-        pal = _light_dialog_palette()
+        dialog.setStyleSheet(_dialog_qss(self._mode))
+        pal = _dialog_palette(self._mode)
         dialog.setPalette(pal)
 
         layout = QVBoxLayout(dialog)
@@ -2246,7 +2249,7 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Выберите IPA")
         dialog.setMinimumWidth(560)
-        dialog.setStyleSheet(_DIALOG_QSS)
+        dialog.setStyleSheet(_dialog_qss(self._mode))
         layout = QVBoxLayout(dialog)
         hint = preferred_store_id or "новейший"
         layout.addWidget(
@@ -2442,7 +2445,7 @@ class MainWindow(QMainWindow):
             app_name=str(app_name),
             device_name=(device.display_name if device else str(payload.get("device_id") or "устройство")),
             version=pkg.version if pkg else None,
-            dialog_qss=_DIALOG_QSS,
+            dialog_qss=_dialog_qss(self._mode),
         )
         self.output.setPlainText(
             f"Установлено: {app_name}\n"
