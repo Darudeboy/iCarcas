@@ -22,9 +22,9 @@ PALETTES: dict[str, dict[str, str]] = {
         "bg": "#0F1117", "surface": "#171A22", "surface2": "#1E222C",
         "hover": "#262B37", "pressed": "#2E3441",
         "border": "#272C38", "border_strong": "#3A4152",
-        "text": "#E8EAF0", "muted": "#A0A8BA",
+        "text": "#F2F4F8", "muted": "#C2C8D6",
         "accent": "#5B8DEF", "accent_hover": "#7AA3F5", "accent_text": "#0B1220",
-        "accent_dim": "#243252", "accent_dim_text": "#7C8DB5",
+        "accent_dim": "#243252", "accent_dim_text": "#B8C6E0",
         "danger": "#F27D7D", "danger_bg": "#2A1A1E", "danger_border": "#5A2D35",
         "ok": "#5FD3A0", "ok_bg": "#14291F", "ok_border": "#24523C",
         "log_bg": "#0B0D12",
@@ -45,7 +45,7 @@ PALETTES: dict[str, dict[str, str]] = {
 _QSS = Template(
     """
 * {
-    font-family: "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", sans-serif;
+    font-family: "Segoe UI", "Segoe UI Variable Text", "Helvetica Neue", sans-serif;
     font-size: 14px;
     color: $text;
 }
@@ -271,7 +271,7 @@ QPlainTextEdit#log {
     padding: 10px;
     font-family: "Cascadia Mono", "Cascadia Code", "Consolas", monospace;
     font-size: 13px;
-    color: $muted;
+    color: $text;
     selection-background-color: $accent;
     selection-color: $accent_text;
 }
@@ -284,6 +284,49 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 
 QToolTip { background: $surface2; color: $text; border: 1px solid $border_strong; padding: 4px 8px; }
+
+/* ---------- Меню (иначе светлая app-palette + тёмный color = белое на белом) ---------- */
+QMenu {
+    background: $surface;
+    color: $text;
+    border: 1px solid $border_strong;
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu::item {
+    background: transparent;
+    color: $text;
+    padding: 8px 18px;
+    border-radius: 6px;
+}
+QMenu::item:selected {
+    background: $hover;
+    color: $text;
+}
+QMenu::item:disabled {
+    color: $muted;
+}
+QMenu::separator {
+    height: 1px;
+    background: $border;
+    margin: 4px 8px;
+}
+
+QCheckBox {
+    color: $text;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid $border_strong;
+    border-radius: 4px;
+    background: $surface2;
+}
+QCheckBox::indicator:checked {
+    background: $accent;
+    border-color: $accent;
+}
 """
 )
 

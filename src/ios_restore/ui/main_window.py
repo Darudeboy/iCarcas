@@ -62,10 +62,11 @@ from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
 from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
+from ios_restore.application.dependency_service import DependencyService
+from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
 from ios_restore.ui.onboarding import (
     ensure_onboarding,
     show_help_dialog,
-    show_setup_dialog,
 )
 from ios_restore.ui.release_notes import show_release_notes_dialog
 from ios_restore.ui.theme import PALETTES, build_stylesheet, repolish
@@ -396,9 +397,9 @@ class MainWindow(QMainWindow):
         self.open_setup_button.setProperty("emphasis", "1")
         repolish(self.open_setup_button)
         self.open_setup_button.setToolTip(
-            "Первая установка: что поставить, чтобы увидеть iPhone/iPad"
+            "Проверка ПК и установка недостающих компонентов одной кнопкой"
         )
-        self.open_setup_button.clicked.connect(lambda: show_setup_dialog(self))
+        self.open_setup_button.clicked.connect(lambda: show_dependencies_dialog(self))
         self.release_notes_button = make_button("Что нового", "header")
         self.release_notes_button.setToolTip("Изменения с последнего релиза")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
@@ -665,6 +666,8 @@ class MainWindow(QMainWindow):
         self._refresh_title()
         self._refresh_theme_button()
         self._refresh_brand_mark()
+        self._rebuild_device_menu()
+        self._rebuild_session_menu()
         # Dynamic properties (chips / badges) need a polish pass after QSS swap.
         for widget in self.findChildren(QWidget):
             if widget.property("state") is not None or widget.property("variant") is not None:
@@ -674,14 +677,29 @@ class MainWindow(QMainWindow):
     def log(self, text: str) -> None:
         self.output.appendPlainText(text)
 
-    def _rebuild_device_menu(self) -> None:
+    def _theme_menu(self) -> QMenu:
+        """Popup menu with theme colors (app palette stays light for dialogs)."""
         menu = QMenu(self)
+        p = PALETTES[self._mode]
+        pal = QPalette(menu.palette())
+        pal.setColor(QPalette.ColorRole.Window, QColor(p["surface"]))
+        pal.setColor(QPalette.ColorRole.Base, QColor(p["surface"]))
+        pal.setColor(QPalette.ColorRole.Text, QColor(p["text"]))
+        pal.setColor(QPalette.ColorRole.WindowText, QColor(p["text"]))
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor(p["text"]))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(p["hover"]))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(p["text"]))
+        menu.setPalette(pal)
+        return menu
+
+    def _rebuild_device_menu(self) -> None:
+        menu = self._theme_menu()
         menu.addAction("Найти устройство", self._on_detect)
         menu.addAction("Установить доверие", self._on_pair)
         self.device_button.setMenu(menu)
 
     def _rebuild_session_menu(self) -> None:
-        menu = QMenu(self)
+        menu = self._theme_menu()
         if self._session_ok:
             menu.addAction("Проверить сессию…", self._on_auth_info)
             menu.addAction("Возобновить вход…", self._on_login)
@@ -753,14 +771,33 @@ class MainWindow(QMainWindow):
                 self,
                 "iCarcas",
                 "Без прохождения знакомства и условий download/install недоступны.\n"
-                "Откройте «Справка» или «Повторить обучение».",
+                "Откройте «Справка» или «Обучение».",
             )
+        self._maybe_prompt_dependencies()
         self._refresh_passphrase_label()
         if self._appstore.session_files_present() and kc_pass.has_stored_passphrase():
             worker = AuthInfoWorker(self._appstore)
             worker.signals.finished.connect(self._on_auth_info_done)
             worker.signals.failed.connect(lambda _m: None)
             self._thread_pool.start(worker)
+
+    def _maybe_prompt_dependencies(self) -> None:
+        report = DependencyService().check()
+        if report.all_ok:
+            return
+        names = ", ".join(c.title for c in report.missing[:5])
+        more = "" if len(report.missing) <= 5 else "…"
+        answer = QMessageBox.question(
+            self,
+            "Нужны компоненты",
+            "На этом ПК не хватает того, без чего загрузка/устройство не заработают:\n"
+            f"{names}{more}\n\n"
+            "Открыть окно «Впервые здесь?» и установить одной кнопкой?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            show_dependencies_dialog(self)
 
     def _require_tos(self) -> bool:
         if tos_accepted():
@@ -1203,24 +1240,33 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Загрузка", hint + extra)
 
     def _append_env_status(self) -> None:
+        report = DependencyService().check()
+        lines = ["Проверка компонентов:"]
+        for comp in report.components:
+            mark = "OK" if comp.ok else "НЕТ"
+            lines.append(f"  [{mark}] {comp.title}: {comp.detail}")
+        session = (
+            "локальные файлы сессии ipatool есть"
+            if self._appstore.session_files_present()
+            else "файлы сессии ipatool не найдены — нужен login"
+        )
+        lines.append(f"Пакеты: {self._packages_dir}")
+        lines.append(f"Сессия: {session}")
+        if not report.all_ok:
+            lines.append("")
+            lines.append("Не хватает компонентов — кнопка «Впервые здесь?» → «Установить недостающее».")
+        else:
+            lines.append("")
+            lines.append(
+                "Если GUI писал ошибку keyring — ограничение Windows/ipatool. "
+                "Кнопки с «…»: passphrase в консоли."
+            )
+        self.output.setPlainText("\n".join(lines))
+        # Keep legacy adapter available for callers that expect exceptions.
         try:
-            tools = EnvironmentCliAdapter().check_tools()
-            session = (
-                "локальные файлы сессии ipatool есть"
-                if self._appstore.session_files_present()
-                else "файлы сессии ipatool не найдены — нужен login"
-            )
-            self.output.setPlainText(
-                "CLI готовы: "
-                + ", ".join(tools)
-                + f"\nКаталог tools: {default_tools_dir()}"
-                + f"\nПакеты: {self._packages_dir}"
-                + f"\nСессия: {session}"
-                + "\n\nЕсли GUI писал ошибку keyring — это ограничение Windows/ipatool. "
-                "Используйте кнопки с «…»: passphrase вводится в консоли."
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.output.setPlainText(f"Проверка окружения: {exc}")
+            EnvironmentCliAdapter().check_tools()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_detect(self) -> None:
         if self._busy:

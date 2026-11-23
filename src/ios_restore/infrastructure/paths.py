@@ -7,6 +7,9 @@ from pathlib import Path
 
 
 def project_root() -> Path:
+    # Portable .exe: folder with iCarcas.exe, tools/, data/, packages/
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     # src/ios_restore/infrastructure/paths.py -> parents[3] == repo root
     return Path(__file__).resolve().parents[3]
 

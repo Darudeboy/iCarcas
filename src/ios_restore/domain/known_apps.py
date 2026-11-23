@@ -36,6 +36,20 @@ KNOWN_APPS: tuple[KnownApp, ...] = (
         bundle_id=None,
         queries=("альфабанк", "alfabank", "alfabankоригинал"),
     ),
+    KnownApp(
+        store_id="1051293689",
+        display_name="МАТЧ! — смотреть спорт онлайн (delisted)",
+        bundle_id="com.ntvplus.matchclub",
+        queries=(
+            "матч",
+            "матчтв",
+            "матч!",
+            "match",
+            "matchtv",
+            "matchclub",
+            "ntvplusmatchclub",
+        ),
+    ),
 )
 
 

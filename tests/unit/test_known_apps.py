@@ -10,6 +10,13 @@ def test_resolve_max() -> None:
     assert hits[0].store_id == "6739530834"
 
 
+def test_resolve_match_tv() -> None:
+    hits = resolve_known_apps("Матч ТВ")
+    assert len(hits) == 1
+    assert hits[0].store_id == "1051293689"
+    assert hits[0].bundle_id == "com.ntvplus.matchclub"
+
+
 def test_max_does_not_match_maxim_by_substring() -> None:
     assert (
         relevance_score(

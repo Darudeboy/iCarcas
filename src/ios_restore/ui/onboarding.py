@@ -33,18 +33,6 @@ HELP_HTML = """
 «Найти ID» само по себе право скачать не даёт.</p>
 """
 
-SETUP_HTML = """
-<p><b>Первая установка</b> — сделайте три шага, иначе iPhone/iPad в программе не появится:</p>
-<ol>
-<li><b>Python 3.12+</b> и <code>pip install -e ".[dev]"</code></li>
-<li>Положите утилиты в <code>tools\\libimobiledevice</code>
-(их нет в git) — см. README</li>
-<li>Windows: <code>winget install --id Apple.AppleMobileDeviceSupport -e</code></li>
-</ol>
-<p>Проверка: <code>.\\scripts\\check-tools.ps1</code>.
-Дальше: кабель → «Доверять» → в углу <b>iOS… → Найти устройство</b>.</p>
-"""
-
 _PAGES: tuple[tuple[str, str], ...] = (
     (
         "Добро пожаловать в iCarcas",
@@ -114,13 +102,10 @@ def show_help_dialog(parent: QWidget | None = None) -> None:
 
 
 def show_setup_dialog(parent: QWidget | None = None) -> None:
-    _show_html_dialog(
-        parent,
-        title="Впервые здесь — первая установка",
-        html=SETUP_HTML,
-        width=520,
-        height=360,
-    )
+    # Interactive check + one-button install (replaces static HTML).
+    from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
+
+    show_dependencies_dialog(parent)
 
 
 class OnboardingDialog(QDialog):

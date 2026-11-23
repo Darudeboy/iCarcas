@@ -12,13 +12,13 @@ from ios_restore.domain.search_query import (
     relevance_score,
     text_matches_needles,
 )
+from ios_restore.infrastructure.paths import project_root
 
 _LINE_RE = re.compile(r"^\s*(.+?)\s*:\s*(\d{6,})\s*$")
 
 
 def default_catalog_path() -> Path:
-    # src/ios_restore/infrastructure/apps_catalog.py → repo root / data
-    return Path(__file__).resolve().parents[3] / "data" / "apps_catalog.txt"
+    return project_root() / "data" / "apps_catalog.txt"
 
 
 def load_apps_catalog(path: Path | None = None) -> list[CatalogApp]:
