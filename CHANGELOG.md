@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-11-24
+
+### Дистрибутивы
+
+- macOS: ad-hoc `codesign` в `build-macos-app.sh`; в README/docs — снятие quarantine (`xattr -cr`) при «приложение повреждено».
+- Сплэш: плавная кассета кадров без зависания IDE; надёжный handoff главного окна.
+
 ## 0.3.0 — 2026-11-24
 
 ### Apple-style UI

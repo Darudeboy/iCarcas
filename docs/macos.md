@@ -65,15 +65,29 @@ CI: Actions → **Build macOS** (workflow_dispatch) или тег `v*`.
 
 После установки DMG:
 1. Перетащить `iCarcas.app` в Applications (или открыть из образа).
-2. Если Gatekeeper: ПКМ → Open → Open.
-3. Один раз: `brew install libimobiledevice ideviceinstaller`
+2. Один раз: `brew install libimobiledevice ideviceinstaller`
 
-Windows ZIP по-прежнему в [iCarcas-exe Releases](https://github.com/Darudeboy/iCarcas-exe/releases).
+### Gatekeeper: «приложение повреждено»
+
+Так macOS часто пишет про **неподписанный** скачанный `.app`/`.dmg` (не обязательно реальная порча файла).
+
+В Terminal:
+
+```bash
+xattr -cr /Applications/iCarcas.app
+open /Applications/iCarcas.app
+```
+
+Или: ПКМ по приложению → Open → Open.
+
+Полное лечение — Apple Developer ID + notarization (пока нет). В сборке CI есть ad-hoc `codesign`.
+
+Windows ZIP: [iCarcas-exe Releases](https://github.com/Darudeboy/iCarcas-exe/releases).
 
 ## Ограничения сейчас
 
 - `idevice*` на машине пользователя — из Homebrew (PATH).
-- Подпись Apple Developer / notarization пока не настроена (возможен диалог Gatekeeper).
+- Нет notarization Apple — возможен диалог Gatekeeper / «повреждено».
 
 ## Проверка
 

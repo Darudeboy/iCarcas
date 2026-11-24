@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build iCarcas.app + .dmg on macOS (must run on a Mac / macOS CI вЂ” not Windows).
+# Build iCarcas.app + .dmg on macOS (must run on a Mac / macOS CI РІР‚вЂќ not Windows).
 #
 # Usage (from repo root):
 #   ./scripts/build-macos-app.sh
@@ -51,7 +51,7 @@ if [[ -f "$PNG" ]] && command -v sips >/dev/null && command -v iconutil >/dev/nu
   done
   iconutil -c icns "$ICONSET" -o "$ICNS"
 else
-  echo "WARN: could not build .icns вЂ” continuing without custom icon"
+  echo "WARN: could not build .icns РІР‚вЂќ continuing without custom icon"
   ICNS=""
 fi
 
@@ -101,7 +101,7 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# Portable layout next to the binary (paths.project_root() в†’ MacOS/)
+# Portable layout next to the binary (paths.project_root() РІвЂ вЂ™ MacOS/)
 mkdir -p "${MACOS_DIR}/tools/libimobiledevice" "${MACOS_DIR}/packages" "${MACOS_DIR}/data"
 if [[ -f "${ROOT}/data/apps_catalog.txt" ]]; then
   cp "${ROOT}/data/apps_catalog.txt" "${MACOS_DIR}/data/"
@@ -144,6 +144,15 @@ if [[ "$SKIP_TOOLS" -eq 0 ]]; then
   rm -rf "$TMP"
 fi
 
+# Ad-hoc code sign вЂ” reduces вЂњapp is damagedвЂќ Gatekeeper false positives
+# for unsigned downloads (full Developer ID + notarization still preferred).
+if command -v codesign >/dev/null; then
+  echo "Ad-hoc codesignвЂ¦"
+  codesign --force --deep --sign - "${APP}" || echo "WARN: codesign failed"
+  # Clear quarantine bit if present on the build machine
+  xattr -cr "${APP}" 2>/dev/null || true
+fi
+
 # README for end user inside the DMG folder staging
 STAGE="${BUILD}/dmg-stage"
 rm -rf "$STAGE"
@@ -152,14 +161,17 @@ cp -R "$APP" "$STAGE/"
 cat > "${STAGE}/README.txt" <<'EOF'
 iCarcas for macOS
 
-1) Open iCarcas.app (if Gatekeeper blocks: right-click в†’ Open в†’ Open).
-2) For the phone utilities once:
-   brew install libimobiledevice ideviceinstaller
-3) Cable в†’ Trust on iPhone в†’ in the app: PhoneвЂ¦ в†’ Find phone в†’ Apple IDвЂ¦ в†’ Sign in.
+1) Drag iCarcas.app to Applications.
+2) If macOS says the app is вЂњdamagedвЂќ / cannot be opened (Gatekeeper):
+   - Right-click the app в†’ Open в†’ Open
+   OR in Terminal:
+     xattr -cr /Applications/iCarcas.app
+     open /Applications/iCarcas.app
+3) Once: brew install libimobiledevice ideviceinstaller
+4) Cable в†’ Trust on device в†’ in iCarcas: Device в†’ Find в†’ Apple ID в†’ Sign in
 
-IPA files are saved next to the app data (packages folder inside the bundle MacOS/ or as prompted).
+Unsigned build: no Apple Developer notarization yet.
 EOF
-# Symlink Applications for convenience
 ln -sf /Applications "${STAGE}/Applications"
 
 ARCH_TAG="$(uname -m)"
