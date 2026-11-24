@@ -64,7 +64,11 @@ def filter_catalog(apps: list[CatalogApp], query: str) -> list[CatalogApp]:
         if q.isdigit() and app.store_id == q:
             scored.append((10_000, app))
             continue
-        if not text_matches_needles(app.display_name, needles) and q not in app.store_id:
+        if q.isdigit() and q in app.store_id:
+            # Partial Store ID (e.g. "8334" → Zvuk 833449999).
+            scored.append((800 if app.store_id.startswith(q) else 500, app))
+            continue
+        if not text_matches_needles(app.display_name, needles):
             continue
         score = relevance_score(
             query=q,

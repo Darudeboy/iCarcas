@@ -1,6 +1,7 @@
 from ios_restore.domain.search_query import (
     query_needles,
     relevance_score,
+    search_query_variants,
     text_matches_needles,
 )
 
@@ -43,3 +44,41 @@ def test_numeric_store_id_boost() -> None:
         store_id="353127685",
     )
     assert score >= 1000
+
+
+def test_cyrillic_query_drops_unrelated_latin_title() -> None:
+    assert (
+        relevance_score(
+            query="банк",
+            display_name="Bank of America",
+            bundle_id="com.boa.mobile",
+            store_id="1",
+        )
+        == 0
+    )
+    assert (
+        relevance_score(
+            query="сбер",
+            display_name="Сбербанк",
+            bundle_id="ru.sberbank.sberbankid",
+            store_id="2",
+        )
+        > 0
+    )
+
+
+def test_seller_only_match_is_noise() -> None:
+    assert (
+        relevance_score(
+            query="mesh",
+            display_name="Random Utility",
+            seller_name="Mesh Soft LLC",
+            store_id="9",
+        )
+        == 0
+    )
+
+
+def test_search_variants_expand_short_brands() -> None:
+    variants = search_query_variants("МЭШ")
+    assert any("Дневник" in v for v in variants)

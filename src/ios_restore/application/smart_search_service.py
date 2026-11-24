@@ -6,10 +6,19 @@ from ios_restore.application.regional_search_service import (
     RegionalAppSearchService,
     iTunesRegionalSearchAdapter,
 )
-from ios_restore.domain.known_apps import resolve_known_apps
+from ios_restore.domain.known_apps import KnownApp, resolve_known_apps
 from ios_restore.domain.models import AppSearchResult, CatalogApp
-from ios_restore.domain.search_query import compact_text, relevance_score
+from ios_restore.domain.search_query import (
+    compact_text,
+    relevance_score,
+    search_query_variants,
+    trim_by_relevance,
+)
 from ios_restore.infrastructure.apps_catalog import filter_catalog, load_apps_catalog
+
+
+def _exclusive_known(known: list[KnownApp]) -> bool:
+    return any(app.blocks_itunes for app in known)
 
 
 class SmartAppSearchService:
@@ -56,7 +65,7 @@ class SmartAppSearchService:
                 merged[key] = (score, app)
 
         # 0) Pinned known brands — always first when query matches.
-        for app in known:
+        for rank, app in enumerate(known):
             add(
                 AppSearchResult(
                     store_id=app.store_id,
@@ -69,7 +78,7 @@ class SmartAppSearchService:
                     source="known",
                     seller_name=None,
                 ),
-                10_000,
+                10_000 - rank,
             )
 
         # 1) Catalog (delisted banks / messengers).
@@ -79,7 +88,6 @@ class SmartAppSearchService:
             source = "catalog"
             boost = 500
             if app.store_id in known_ids:
-                # Prefer the explicit known title over cryptic catalog label.
                 pinned = next(k for k in known if k.store_id == app.store_id)
                 display = pinned.display_name
                 source = "known+catalog"
@@ -106,17 +114,23 @@ class SmartAppSearchService:
             )
             add(result, score)
 
-        # 2) iTunes (ranked; empty if only noise).
-        # When a known brand matched (MAX и т.п.), do not mix in unrelated
-        # live App Store hits like "MaX UC" / random MaxMessenger.
-        if not known:
+        # 2) iTunes — several query variants, then relevance filter.
+        exclusive = _exclusive_known(known)
+        itunes_terms: list[str] = [] if exclusive else search_query_variants(cleaned)
+        # Soft pins: also search by pinned titles (Дневник МЭШ и т.п.).
+        if not exclusive:
+            for app in known:
+                if app.display_name and app.display_name not in itunes_terms:
+                    itunes_terms.append(app.display_name)
+
+        short_brand = len(compact_text(cleaned)) <= 4
+        min_itunes_score = 140 if short_brand else 60
+
+        for iterm in itunes_terms:
             try:
-                itunes_hits = self._regional.search_region(cleaned, region_code)
+                itunes_hits = self._regional.search_region(iterm, region_code)
             except Exception:  # noqa: BLE001
                 itunes_hits = []
-
-            short_brand = len(compact_text(cleaned)) <= 4
-            min_itunes_score = 120 if short_brand else 1
 
             for app in itunes_hits:
                 score = relevance_score(
@@ -159,4 +173,5 @@ class SmartAppSearchService:
                 (pair[1].display_name or "").casefold(),
             ),
         )
-        return [app for _, app in ordered]
+        trimmed = trim_by_relevance(list(ordered))
+        return [app for _, app in trimmed]

@@ -156,20 +156,29 @@ def _tune_data_table(
     *,
     name_col: int = 0,
     hide_empty_columns: bool = True,
+    wrap: bool = False,
 ) -> None:
-    """Full text visible: no elide, resize-to-contents, hide all-empty columns."""
-    table.setWordWrap(True)
-    table.setTextElideMode(Qt.TextElideMode.ElideNone)
+    """Readable grid: one-line rows by default (wrap=True only when needed)."""
+    table.setWordWrap(wrap)
+    table.setTextElideMode(
+        Qt.TextElideMode.ElideNone if wrap else Qt.TextElideMode.ElideRight
+    )
     table.setAlternatingRowColors(True)
     table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     table.setSortingEnabled(True)
     table.verticalHeader().setVisible(True)
-    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    table.verticalHeader().setDefaultSectionSize(28)
+    table.verticalHeader().setSectionResizeMode(
+        QHeaderView.ResizeMode.ResizeToContents
+        if wrap
+        else QHeaderView.ResizeMode.Fixed
+    )
 
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
     header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    header.setMinimumSectionSize(72)
 
     for col in range(table.columnCount()):
         if hide_empty_columns and _column_is_empty(table, col):
@@ -179,12 +188,21 @@ def _tune_data_table(
         if col == name_col:
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         else:
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
 
-    table.resizeRowsToContents()
-    # After stretch, ensure name still readable: min width.
-    if 0 <= name_col < table.columnCount() and not table.isColumnHidden(name_col):
-        table.setColumnWidth(name_col, max(table.columnWidth(name_col), 280))
+    if wrap:
+        table.resizeRowsToContents()
+    else:
+        table.resizeColumnsToContents()
+        # Keep name readable; avoid jagged columns from multi-line cells.
+        if 0 <= name_col < table.columnCount() and not table.isColumnHidden(name_col):
+            table.setColumnWidth(name_col, max(table.columnWidth(name_col), 260))
+        for col in range(table.columnCount()):
+            if col == name_col or table.isColumnHidden(col):
+                continue
+            table.setColumnWidth(col, min(max(table.columnWidth(col), 80), 220))
+        for row in range(table.rowCount()):
+            table.setRowHeight(row, 28)
 
 
 def _column_is_empty(table: QTableWidget, col: int) -> bool:
@@ -478,7 +496,9 @@ class MainWindow(QMainWindow):
         self.card_store.body.addLayout(archive_row)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Название, Store ID или bundle…")
+        self.search_input.setPlaceholderText(
+            "Название или коротко: МЭШ, Матч, Store ID, bundle…"
+        )
         self.search_input.setClearButtonEnabled(True)
         self._region_code = "RU"
         self._region_tags: dict[str, QPushButton] = {}
@@ -1668,7 +1688,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         hint = QLabel(
             f"Каталог + iTunes ({region_code}). "
-            "Карточка ниже: регион и оценка лицензии до скачивания."
+            "Сверху — наиболее похожие по названию. "
+            "Полное имя выбранного — в карточке ниже."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -1697,7 +1718,7 @@ class MainWindow(QMainWindow):
                 ),
                 data_index=row_idx,
             )
-        _tune_data_table(table, name_col=0, hide_empty_columns=True)
+        _tune_data_table(table, name_col=0, hide_empty_columns=True, wrap=False)
         layout.addWidget(table)
 
         card_text = _make_selection_detail(dialog)

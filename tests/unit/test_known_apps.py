@@ -17,6 +17,30 @@ def test_resolve_match_tv() -> None:
     assert hits[0].bundle_id == "com.ntvplus.matchclub"
 
 
+def test_resolve_mesh_school() -> None:
+    hits = resolve_known_apps("МЭШ")
+    ids = {h.store_id for h in hits}
+    assert "1475774929" in ids  # Дневник МЭШ
+    assert "1619753967" in ids  # Журнал МЭШ
+
+
+def test_mesh_query_drops_english_meshlab() -> None:
+    good = relevance_score(
+        query="МЭШ",
+        display_name="Дневник МЭШ",
+        bundle_id="ru.mes.dnevnik",
+        store_id="1475774929",
+    )
+    noise = relevance_score(
+        query="МЭШ",
+        display_name="MeshLab for iOS",
+        bundle_id="com.visualcomputinglab.MeshPad",
+        store_id="451944013",
+    )
+    assert good > 0
+    assert noise == 0
+
+
 def test_max_does_not_match_maxim_by_substring() -> None:
     assert (
         relevance_score(
@@ -73,3 +97,32 @@ def test_smart_search_max_pins_messenger() -> None:
     assert "6752884875" not in ids
     assert "6477783496" not in ids
     assert "579985456" not in ids
+
+
+def test_smart_search_mesh_pins_diary_first() -> None:
+    class _FakeRegional:
+        def search_region(self, term: str, region_code: str) -> list[AppSearchResult]:
+            return [
+                AppSearchResult(
+                    store_id="451944013",
+                    bundle_id="com.visualcomputinglab.MeshPad",
+                    display_name="MeshLab for iOS",
+                    region=region_code,
+                    source="itunes",
+                ),
+                AppSearchResult(
+                    store_id="1475774929",
+                    bundle_id="ru.mes.dnevnik",
+                    display_name="Дневник МЭШ",
+                    region=region_code,
+                    source="itunes",
+                    version="3.94.7",
+                ),
+            ]
+
+    svc = SmartAppSearchService(catalog=[])
+    svc._regional.search_region = _FakeRegional().search_region  # type: ignore[method-assign]
+    results = svc.search("МЭШ", "RU")
+    assert results[0].store_id == "1475774929"
+    ids = {r.store_id for r in results}
+    assert "451944013" not in ids

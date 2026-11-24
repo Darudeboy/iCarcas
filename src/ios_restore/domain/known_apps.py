@@ -14,6 +14,8 @@ class KnownApp:
     bundle_id: str | None = None
     # Exact compact queries that should pin this app first.
     queries: tuple[str, ...] = ()
+    # If True and this pin matched — do not mix live iTunes noise (MAX и т.п.).
+    blocks_itunes: bool = False
 
 
 # Keep titles explicit so they are not confused with taxi / random "Max*" apps.
@@ -23,18 +25,21 @@ KNOWN_APPS: tuple[KnownApp, ...] = (
         display_name="MAX — мессенджер (VK / ru.oneme.app)",
         bundle_id="ru.oneme.app",
         queries=("max", "макс", "maxmessenger", "мессенджерmax", "oneme"),
+        blocks_itunes=True,
     ),
     KnownApp(
         store_id="833449999",
         display_name="Звук",
         bundle_id=None,
         queries=("звук", "zvuk"),
+        blocks_itunes=True,
     ),
     KnownApp(
         store_id="353127685",
         display_name="Альфа-Банк (оригинал, delisted)",
         bundle_id=None,
         queries=("альфабанк", "alfabank", "alfabankоригинал"),
+        blocks_itunes=True,
     ),
     KnownApp(
         store_id="1051293689",
@@ -49,6 +54,32 @@ KNOWN_APPS: tuple[KnownApp, ...] = (
             "matchclub",
             "ntvplusmatchclub",
         ),
+        blocks_itunes=True,
+    ),
+    # Московская электронная школа — короткий «МЭШ» иначе ловит английский Mesh*.
+    KnownApp(
+        store_id="1475774929",
+        display_name="Дневник МЭШ",
+        bundle_id="ru.mes.dnevnik",
+        queries=("мэш", "mes", "дневникмэш", "московскаяэлектроннаяшкола"),
+    ),
+    KnownApp(
+        store_id="1619753967",
+        display_name="Журнал МЭШ",
+        bundle_id="ru.mos.school.journal",
+        queries=("мэш", "mes", "журналмэш"),
+    ),
+    KnownApp(
+        store_id="1260486799",
+        display_name="Библиотека МЭШ",
+        bundle_id="ru.mos.etbook",
+        queries=("мэш", "mes", "библиотекамэш"),
+    ),
+    KnownApp(
+        store_id="6508168563",
+        display_name="Колледж МЭШ",
+        bundle_id="ru.mes.diary.po",
+        queries=("мэш", "mes", "колледжмэш"),
     ),
 )
 
