@@ -105,6 +105,10 @@ class ProcessRunner:
             popen_kwargs["creationflags"] = getattr(
                 subprocess, "CREATE_NO_WINDOW", 0x08000000
             )
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            popen_kwargs["startupinfo"] = startupinfo
         try:
             proc = self._popen_factory(**popen_kwargs)
         except FileNotFoundError as exc:

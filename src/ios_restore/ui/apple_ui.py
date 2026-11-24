@@ -9,12 +9,38 @@ from __future__ import annotations
 
 from string import Template
 
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QPropertyAnimation,
+from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation,
                             QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QFrame,
                                QGraphicsOpacityEffect, QHBoxLayout, QLabel,
                                QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
+
+
+def _no_top_flash(w: QWidget) -> None:
+    """Orphan QWidgets briefly become native top-level HWNDs on Windows."""
+    if w.parent() is None:
+        w.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+
+
+def _clear_top_flash(w: QWidget) -> None:
+    w.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+
+
+def _reveal_tree(root: QWidget) -> None:
+    """Clear boot-time DontShowOnScreen on the window and every child."""
+    _clear_top_flash(root)
+    for child in root.findChildren(QWidget):
+        _clear_top_flash(child)
+
+
+class _ParentRevealMixin:
+    """Drop DontShowOnScreen as soon as the widget gets a real parent."""
+
+    def event(self, e):  # noqa: N802
+        if e.type() == QEvent.Type.ParentChange and self.parent() is not None:  # type: ignore[attr-defined]
+            _clear_top_flash(self)  # type: ignore[arg-type]
+        return super().event(e)  # type: ignore[misc]
 
 # --------------------------------------------------------------------------- тема
 PALETTES = {
@@ -119,10 +145,12 @@ def draw_glyph(p: QPainter, kind: str, r: QRectF) -> None:
     p.restore()
 
 
-class Tile(QWidget):
+class Tile(_ParentRevealMixin, QWidget):
     """Цветной скруглённый квадрат: буква шага, а после выполнения — галочка."""
-    def __init__(self, color="blue", letter="", size=30):
-        super().__init__(); self.color, self.letter, self.done = color, letter, False
+    def __init__(self, color="blue", letter="", size=30, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        self.color, self.letter, self.done = color, letter, False
         self.setFixedSize(size, size)
 
     def set_done(self, done: bool) -> None:
@@ -144,10 +172,11 @@ class Tile(QWidget):
 
 
 # --------------------------------------------------------------------- кнопки
-class HoverButton(QAbstractButton):
+class HoverButton(_ParentRevealMixin, QAbstractButton):
     """База: плавное наведение (_h) и нажатие (_p), 0..1."""
     def __init__(self, text="", parent=None):
         super().__init__(parent)
+        _no_top_flash(self)
         if text:
             self.setText(text)
         self._h = self._p = 0.0
@@ -169,8 +198,8 @@ class HoverButton(QAbstractButton):
 
 
 class AppleButton(HoverButton):
-    def __init__(self, text, kind="tinted", large=False):
-        super().__init__(text)
+    def __init__(self, text, kind="tinted", large=False, parent=None):
+        super().__init__(text, parent)
         self.kind, self.large, self._kbd = kind, large, False
         self.setFixedHeight(48 if large else 34)
         self.setSizePolicy(QSizePolicy.Expanding if large else QSizePolicy.Minimum, QSizePolicy.Fixed)
@@ -207,8 +236,9 @@ class AppleButton(HoverButton):
 
 # -------------------------------------------------------------------- навигация
 class NavItem(HoverButton):
-    def __init__(self, text, glyph, color):
-        super().__init__(text); self.glyph, self.color = glyph, color
+    def __init__(self, text, glyph, color, parent=None):
+        super().__init__(text, parent)
+        self.glyph, self.color = glyph, color
         self.setCheckable(True); self.setFixedHeight(40)
 
     def paintEvent(self, _):
@@ -235,25 +265,28 @@ class _Pill(QWidget):
         p.drawRoundedRect(QRectF(self.rect()), 9, 9)
 
 
-class Sidebar(QWidget):
+class Sidebar(_ParentRevealMixin, QWidget):
     selected = Signal(int)
 
-    def __init__(self, entries, version=""):
-        super().__init__(); styled(self, "sidebar"); self.setFixedWidth(232); self._i = 0
+    def __init__(self, entries, version="", parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        styled(self, "sidebar"); self.setFixedWidth(232); self._i = 0
         outer = QVBoxLayout(self); outer.setContentsMargins(14, 24, 14, 16); outer.setSpacing(20)
-        self.brand = QLabel(); self.brand.setObjectName("brand"); self.brand.setTextFormat(Qt.RichText)
+        self.brand = QLabel(self); self.brand.setObjectName("brand"); self.brand.setTextFormat(Qt.RichText)
         self.brand.setContentsMargins(10, 0, 0, 0); outer.addWidget(self.brand)
 
-        self.holder = QWidget(); hl = QVBoxLayout(self.holder)
+        self.holder = QWidget(self); hl = QVBoxLayout(self.holder)
         hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(2)
         self.pill = _Pill(self.holder)                      # создан первым → лежит под кнопками
         self.group = QButtonGroup(self); self.items: list[NavItem] = []
         for k, (text, glyph, color) in enumerate(entries):
-            it = NavItem(text, glyph, color); self.group.addButton(it); hl.addWidget(it)
+            it = NavItem(text, glyph, color, parent=self.holder)
+            self.group.addButton(it); hl.addWidget(it)
             it.clicked.connect(lambda _=False, k=k: self.select(k)); self.items.append(it)
         hl.addStretch(1); outer.addWidget(self.holder, 1)
 
-        ver = QLabel(version); ver.setObjectName("sub"); ver.setContentsMargins(10, 0, 0, 0)
+        ver = QLabel(version, self); ver.setObjectName("sub"); ver.setContentsMargins(10, 0, 0, 0)
         outer.addWidget(ver)
         self._anim = QPropertyAnimation(self.pill, b"geometry", self)
         self._anim.setDuration(300); self._anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -291,14 +324,20 @@ class FadeStack(QStackedWidget):
         end = w.pos(); slide = QPropertyAnimation(w, b"pos", w); slide.setDuration(320)
         slide.setStartValue(end + QPoint(0, 12)); slide.setEndValue(end)
         slide.setEasingCurve(QEasingCurve.OutCubic)
-        fade.start(QPropertyAnimation.DeleteWhenStopped); slide.start(QPropertyAnimation.DeleteWhenStopped)
+        # Keep refs so GC does not kill animations mid-flight (looks like a freeze).
+        w._icarcas_fade = fade  # type: ignore[attr-defined]
+        w._icarcas_slide = slide  # type: ignore[attr-defined]
+        fade.start()
+        slide.start()
 
 
 # -------------------------------------------------------------------- контент
-class StatusDot(QWidget):
+class StatusDot(_ParentRevealMixin, QWidget):
     """Серая точка → зелёная с мягкой пульсацией, когда состояние «on»."""
-    def __init__(self):
-        super().__init__(); self.setFixedSize(16, 16); self.state, self._t = "off", 0.0
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        self.setFixedSize(16, 16); self.state, self._t = "off", 0.0
         self._a = QVariantAnimation(self); self._a.setDuration(1900); self._a.setLoopCount(-1)
         self._a.setStartValue(0.0); self._a.setEndValue(1.0)
         self._a.valueChanged.connect(lambda v: (setattr(self, "_t", float(v)), self.update()))
@@ -315,10 +354,12 @@ class StatusDot(QWidget):
         p.setBrush(col); p.drawEllipse(c, 4.5, 4.5)
 
 
-class ProgressLine(QWidget):
+class ProgressLine(_ParentRevealMixin, QWidget):
     """Тонкая бегущая полоска под верхним краем — «идёт операция»."""
-    def __init__(self):
-        super().__init__(); self.setFixedHeight(3); self.hide(); self._t = 0.0
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        self.setFixedHeight(3); self.hide(); self._t = 0.0
         self._a = QVariantAnimation(self); self._a.setDuration(1300); self._a.setLoopCount(-1)
         self._a.setStartValue(0.0); self._a.setEndValue(1.0); self._a.setEasingCurve(QEasingCurve.InOutSine)
         self._a.valueChanged.connect(lambda v: (setattr(self, "_t", float(v)), self.update()))
@@ -333,44 +374,65 @@ class ProgressLine(QWidget):
         p.setBrush(P["blue"]); p.drawRoundedRect(QRectF(x, 0, seg, 3), 1.5, 1.5)
 
 
-class _Sep(QWidget):
-    def __init__(self): super().__init__(); self.setFixedHeight(1)
-    def paintEvent(self, _): QPainter(self).fillRect(16, 0, self.width() - 16, 1, P["sep"])
+class _Sep(_ParentRevealMixin, QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        self.setFixedHeight(1)
+
+    def paintEvent(self, _):
+        QPainter(self).fillRect(16, 0, self.width() - 16, 1, P["sep"])
 
 
-class Group(QFrame):
+class Group(_ParentRevealMixin, QFrame):
     """Сгруппированный список как в «Настройках» iOS."""
-    def __init__(self):
-        super().__init__(); self.setObjectName("group")
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
+        self.setObjectName("group")
         self._l = QVBoxLayout(self); self._l.setContentsMargins(0, 0, 0, 0); self._l.setSpacing(0)
 
     def add(self, w: QWidget) -> QWidget:
-        if self._l.count(): self._l.addWidget(_Sep())
-        self._l.addWidget(w); return w
+        if self._l.count():
+            self._l.addWidget(_Sep(self))
+        self._l.addWidget(w)
+        _clear_top_flash(w)
+        return w
 
 
-class Row(QWidget):
-    def __init__(self, title, sub="", lead: QWidget | None = None, dot=False):
-        super().__init__()
+class Row(_ParentRevealMixin, QWidget):
+    def __init__(self, title, sub="", lead: QWidget | None = None, dot=False, parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
         h = QHBoxLayout(self); h.setContentsMargins(16, 12, 14, 12); h.setSpacing(12)
-        if lead: h.addWidget(lead)
-        self.dot = StatusDot() if dot else None
-        if self.dot: h.addWidget(self.dot)
+        if lead:
+            h.addWidget(lead)
+            _clear_top_flash(lead)
+        self.dot = StatusDot(self) if dot else None
+        if self.dot:
+            h.addWidget(self.dot)
         col = QVBoxLayout(); col.setSpacing(1)
-        self.title = QLabel(title); self.title.setObjectName("rowTitle")
-        self.sub = QLabel(sub); self.sub.setObjectName("rowSub"); self.sub.setVisible(bool(sub))
+        self.title = QLabel(title, self); self.title.setObjectName("rowTitle")
+        self.sub = QLabel(sub, self); self.sub.setObjectName("rowSub"); self.sub.setVisible(bool(sub))
         col.addWidget(self.title); col.addWidget(self.sub); h.addLayout(col, 1)
         self.tail = QHBoxLayout(); self.tail.setSpacing(8); h.addLayout(self.tail)
 
-    def set_sub(self, text: str) -> None: self.sub.setText(text); self.sub.setVisible(bool(text))
-    def add_tail(self, w: QWidget) -> QWidget: self.tail.addWidget(w, 0, Qt.AlignVCenter); return w
+    def set_sub(self, text: str) -> None:
+        self.sub.setText(text); self.sub.setVisible(bool(text))
+
+    def add_tail(self, w: QWidget) -> QWidget:
+        self.tail.addWidget(w, 0, Qt.AlignVCenter)
+        _clear_top_flash(w)
+        return w
 
 
-class Page(QWidget):
-    def __init__(self, title, subtitle=""):
-        super().__init__()
+class Page(_ParentRevealMixin, QWidget):
+    def __init__(self, title, subtitle="", parent=None):
+        super().__init__(parent)
+        _no_top_flash(self)
         self.lay = QVBoxLayout(self); self.lay.setContentsMargins(36, 30, 36, 28); self.lay.setSpacing(16)
         head = QHBoxLayout(); col = QVBoxLayout(); col.setSpacing(2)
-        t = QLabel(title); t.setObjectName("large"); s = QLabel(subtitle); s.setObjectName("sub")
+        t = QLabel(title, self); t.setObjectName("large")
+        s = QLabel(subtitle, self); s.setObjectName("sub")
         col.addWidget(t); col.addWidget(s); head.addLayout(col, 1)
         self.head_tail = QHBoxLayout(); head.addLayout(self.head_tail); self.lay.addLayout(head)

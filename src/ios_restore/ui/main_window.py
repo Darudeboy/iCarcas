@@ -391,7 +391,8 @@ class MainWindow(QMainWindow):
 
         aui.set_theme(self._mode)
 
-        shell = QWidget()
+        # Parent everything to this window — orphan QWidgets flash as tiny HWNDs on Windows.
+        shell = QWidget(self)
         shell.setObjectName("root")
         self.setCentralWidget(shell)
         shell_layout = QHBoxLayout(shell)
@@ -405,13 +406,13 @@ class MainWindow(QMainWindow):
             ("Приложение", "app", "purple"),
             ("Журнал", "log", "gray"),
         ]
-        self.sidebar = Sidebar(pages, f"v{_app_version()}")
-        content = aui.styled(QWidget(), "content")
+        self.sidebar = Sidebar(pages, f"v{_app_version()}", parent=shell)
+        content = aui.styled(QWidget(shell), "content")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
-        self.progress = ProgressLine()
-        self.stack = FadeStack()
+        self.progress = ProgressLine(content)
+        self.stack = FadeStack(content)
         content_layout.addWidget(self.progress)
         content_layout.addWidget(self.stack, 1)
         shell_layout.addWidget(self.sidebar)
@@ -453,14 +454,15 @@ class MainWindow(QMainWindow):
         self.set_device_chip(False)
         # Defer CLI / dependency probes until after first paint (avoids console flashes
         # while the brand splash is still running).
-        QTimer.singleShot(0, self._append_env_status)
+        # Env probe after first show — never during splash construction.
 
     def _wrap_scroll(self, page: Page) -> QScrollArea:
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(page)
+        aui._clear_top_flash(page)  # noqa: SLF001
         return scroll
 
     def _build_page_start(self) -> QWidget:
@@ -621,14 +623,14 @@ class MainWindow(QMainWindow):
 
         self._region_code = "RU"
         self._region_tags: dict[str, QPushButton] = {}
-        region_wrap = QWidget()
+        region_wrap = QWidget(p)
         region_grid = QGridLayout(region_wrap)
         region_grid.setContentsMargins(12, 8, 12, 8)
         region_grid.setHorizontalSpacing(6)
         region_grid.setVerticalSpacing(6)
         region_cols = 4
         for index, region in enumerate(RegionalAppSearchService.known_regions()):
-            tag = QPushButton(region.name)
+            tag = QPushButton(region.name, region_wrap)
             tag.setObjectName("regionTag")
             tag.setCursor(Qt.CursorShape.PointingHandCursor)
             tag.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -764,6 +766,7 @@ class MainWindow(QMainWindow):
         if self._bootstrap_scheduled:
             return
         self._bootstrap_scheduled = True
+        QTimer.singleShot(0, self._append_env_status)
         QTimer.singleShot(0, self._bootstrap_tos_and_session)
 
     def _refresh_theme_button(self) -> None:

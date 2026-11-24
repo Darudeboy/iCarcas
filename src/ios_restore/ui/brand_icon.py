@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QRectF,
     Qt,
     QTimer,
+    QVariantAnimation,
 )
 from PySide6.QtGui import (
     QColor,
@@ -21,12 +22,20 @@ from PySide6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPalette,
     QPen,
     QPixmap,
     QRadialGradient,
     QTransform,
 )
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QGraphicsOpacityEffect,
+    QLabel,
+    QSplashScreen,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 def resources_dir() -> Path:
@@ -252,8 +261,83 @@ class StackingLogoWidget(QWidget):
         painter.end()
 
 
-class BrandSplash(QWidget):
-    """Splash with stacking logo, then calls on_finished."""
+def render_boot_pixmap(
+    mode: str,
+    *,
+    progress: float = 1.0,
+    brand_opacity: float = 1.0,
+    subtitle: str = "Загрузка…",
+    width: int = 520,
+    height: int = 480,
+) -> QPixmap:
+    """Off-screen frame for QSplashScreen — no live QWidget chrome to flicker."""
+    from ios_restore.ui.theme import PALETTES
+
+    p = PALETTES["dark" if mode == "dark" else "light"]
+    bg = QColor(p["bg"])
+    fg = QColor(p["text"])
+    muted = QColor(p["muted"])
+    accent = QColor(p["accent"])
+
+    pix = QPixmap(width, height)
+    pix.fill(bg)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    alpha = max(0.0, min(1.0, brand_opacity))
+    if alpha > 0.01:
+        painter.setOpacity(alpha)
+        logo_w, logo_h = 280, 230
+        logo_x = (width - logo_w) / 2
+        logo_y = height * 0.18
+        pad = min(logo_w, logo_h) * 0.04
+        _paint_stack(
+            painter,
+            QRectF(logo_x + pad, logo_y + pad, logo_w - 2 * pad, logo_h - 2 * pad),
+            progress=progress,
+        )
+
+        from PySide6.QtGui import QFont
+
+        title_font = QFont("Segoe UI Semibold")
+        title_font.setPixelSize(28)
+        title_font.setWeight(QFont.Weight.Bold)
+        painter.setFont(title_font)
+        title_y = int(logo_y + logo_h + 18)
+        # Draw "i" in accent, "Carcas" in fg.
+        metrics = painter.fontMetrics()
+        full = "iCarcas"
+        full_w = metrics.horizontalAdvance(full)
+        tx = (width - full_w) / 2
+        painter.setPen(accent)
+        painter.drawText(int(tx), title_y + metrics.ascent(), "i")
+        painter.setPen(fg)
+        painter.drawText(
+            int(tx + metrics.horizontalAdvance("i")),
+            title_y + metrics.ascent(),
+            "Carcas",
+        )
+
+        sub_font = QFont("Segoe UI")
+        sub_font.setPixelSize(13)
+        painter.setFont(sub_font)
+        painter.setPen(muted)
+        sub_rect = QRectF(0, title_y + metrics.height() + 10, width, 24)
+        painter.drawText(sub_rect, int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop), subtitle)
+
+    painter.end()
+    return pix
+
+
+class BrandSplash(QSplashScreen):
+    """Pixmap splash: pre-render a smooth reel once, then play by index.
+
+    Full paints on every animation tick froze the IDE; cached frames flip cheaply
+    while still looking fluid (~30 fps).
+    """
+
+    _FADE_FRAMES = 12
+    _LAYER_FRAMES = 36
 
     def __init__(
         self,
@@ -262,82 +346,123 @@ class BrandSplash(QWidget):
         on_finished=None,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
+        self._mode = "dark" if mode == "dark" else "light"
         self._on_finished = on_finished
         self._closed = False
-        self.setObjectName("BrandSplash")
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.SplashScreen
-            | Qt.WindowType.WindowStaysOnTopHint
+        self._handoff_window: QWidget | None = None
+        self._frames: list[QPixmap] = []
+        self._anim: QVariantAnimation | None = None
+        self._cover = render_boot_pixmap(
+            self._mode, progress=1.0, brand_opacity=0.0, subtitle=""
         )
+        super().__init__(self._cover, Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        from ios_restore.ui.theme import PALETTES
 
-        p = PALETTES["dark" if mode == "dark" else "light"]
-        bg, fg, muted, accent = p["bg"], p["text"], p["muted"], p["accent"]
-        self.setStyleSheet(
-            f"QWidget#BrandSplash {{ background-color: {bg}; }}"
-        )
-        self.setFixedSize(520, 480)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 48, 36, 40)
-        layout.setSpacing(16)
-        layout.addStretch(1)
-
-        self.logo = StackingLogoWidget(self, width=280, height=230)
-        layout.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        title = QLabel(self)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setTextFormat(Qt.TextFormat.RichText)
-        title.setText(
-            f'<span style="font-family:\'Segoe UI Variable Display\',\'Bahnschrift SemiBold\','
-            f'\'Segoe UI Semibold\',sans-serif; font-size:28px; font-weight:700;'
-            f' letter-spacing:-0.3px;">'
-            f'<span style="color:{accent}">i</span>'
-            f'<span style="color:{fg}">Carcas</span></span>'
-        )
-        layout.addWidget(title)
-
-        sub = QLabel("Загрузка…", self)
-        sub.setObjectName("splashSub")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet(f"color: {muted}; font-size: 13px;")
-        layout.addWidget(sub)
-        layout.addStretch(1)
-
-        self.logo._anim.finished.connect(self._finish)  # noqa: SLF001
-        self._center_on_screen()
-
-    def _center_on_screen(self) -> None:
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return
-        geo = screen.availableGeometry()
-        self.move(
-            geo.center().x() - self.width() // 2,
-            geo.center().y() - self.height() // 2,
-        )
-
-    def start(self) -> None:
-        """Show a fully composed frame, then start the layer animation."""
+    def show_cover(self) -> None:
+        """Show solid theme plate immediately (pre-rendered, no empty widget)."""
+        self.setPixmap(self._cover)
         self.show()
         self.raise_()
-        self.activateWindow()
-        QTimer.singleShot(40, self.logo.play)
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
 
-    def _finish(self) -> None:
-        # Brief hold on the assembled mark before opening the main window.
-        QTimer.singleShot(280, self._close_and_continue)
+    @staticmethod
+    def _ease_out_cubic(t: float) -> float:
+        t = max(0.0, min(1.0, t))
+        return 1.0 - (1.0 - t) ** 3
 
-    def _close_and_continue(self) -> None:
+    def _build_reel(self) -> list[QPixmap]:
+        frames: list[QPixmap] = []
+        # 1) Soft fade-in of the assembled mark.
+        for i in range(self._FADE_FRAMES):
+            t = (i + 1) / self._FADE_FRAMES
+            frames.append(
+                render_boot_pixmap(
+                    self._mode,
+                    progress=1.0,
+                    brand_opacity=self._ease_out_cubic(t),
+                    subtitle="Загрузка…",
+                )
+            )
+        # 2) Layer drop — denser sampling + easing for a smooth fall.
+        for i in range(self._LAYER_FRAMES):
+            t = i / max(1, self._LAYER_FRAMES - 1)
+            frames.append(
+                render_boot_pixmap(
+                    self._mode,
+                    progress=self._ease_out_cubic(t),
+                    brand_opacity=1.0,
+                    subtitle="Собираем…",
+                )
+            )
+        frames.append(
+            render_boot_pixmap(
+                self._mode, progress=1.0, brand_opacity=1.0, subtitle="Готово"
+            )
+        )
+        return frames
+
+    def start_brand(self, handoff_window: QWidget | None = None) -> None:
+        self._handoff_window = handoff_window
+        self.show_cover()
+        self._frames = self._build_reel()
+        if not self._frames:
+            self._handoff()
+            return
+
+        anim = QVariantAnimation(self)
+        # ~33 ms/frame ≈ 30 fps; duration matches reel length.
+        anim.setDuration(max(400, len(self._frames) * 33))
+        anim.setStartValue(0.0)
+        anim.setEndValue(float(len(self._frames) - 1))
+        anim.setEasingCurve(QEasingCurve.Type.Linear)
+
+        def _tick(v: object) -> None:
+            if self._closed or not self._frames:
+                return
+            idx = int(round(float(v)))
+            idx = max(0, min(len(self._frames) - 1, idx))
+            self.setPixmap(self._frames[idx])
+
+        anim.valueChanged.connect(_tick)
+        anim.finished.connect(self._after_reel)
+        self._anim = anim
+        # Show first frame immediately, then run.
+        self.setPixmap(self._frames[0])
+        anim.start()
+        QTimer.singleShot(anim.duration() + 800, self._handoff)
+
+    def _after_reel(self) -> None:
+        if self._frames:
+            self.setPixmap(self._frames[-1])
+        QTimer.singleShot(280, self._handoff)
+
+    def _handoff(self) -> None:
         if self._closed:
             return
         self._closed = True
+        if self._anim is not None:
+            self._anim.stop()
+        window = self._handoff_window
         callback = self._on_finished
-        self.hide()
+        # Free frame memory before showing the main UI.
+        self._frames.clear()
+        if window is not None:
+            from ios_restore.ui import apple_ui as aui
+
+            aui._reveal_tree(window)  # noqa: SLF001
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            try:
+                self.finish(window)
+            except Exception:  # noqa: BLE001
+                self.close()
+            if callback:
+                callback()
+            return
+        self.close()
         if callback:
             callback()
-        self.close()
