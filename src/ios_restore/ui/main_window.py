@@ -61,7 +61,18 @@ from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAda
 from ios_restore.infrastructure.history_store import HistoryStore
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
 from ios_restore.infrastructure.paths import default_tools_dir
-from ios_restore.ui.brand_icon import StackingLogoWidget, icon_png_path, load_app_icon
+from ios_restore.ui import apple_ui as aui
+from ios_restore.ui.apple_ui import (
+    AppleButton,
+    FadeStack,
+    Group,
+    Page,
+    ProgressLine,
+    Row,
+    Sidebar,
+    Tile,
+)
+from ios_restore.ui.brand_icon import load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.application.dependency_service import DependencyService
 from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
@@ -70,7 +81,7 @@ from ios_restore.ui.onboarding import (
     show_help_dialog,
 )
 from ios_restore.ui.release_notes import show_release_notes_dialog
-from ios_restore.ui.theme import PALETTES, build_palette, build_stylesheet, repolish
+from ios_restore.ui.theme import PALETTES, build_palette, repolish
 from ios_restore.ui.tos import ensure_tos_accepted, tos_accepted
 from ios_restore.ui.workers import (
     AuthInfoWorker,
@@ -80,6 +91,31 @@ from ios_restore.ui.workers import (
     PairDeviceWorker,
     RegionalSearchAppWorker,
 )
+
+
+def _app_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("ios-restore")
+    except Exception:
+        return "0.3.0"
+
+
+class _FlowCard:
+    """Совместимость со старыми вызовами card_*.set_state → плитки на «Начало»."""
+
+    def __init__(self, tiles: dict[str, Tile], letter: str, status: QLabel | None = None) -> None:
+        self._tiles = tiles
+        self._letter = letter
+        self._status = status
+
+    def set_state(self, state: str, status_text: str = "") -> None:
+        tile = self._tiles.get(self._letter)
+        if tile is not None:
+            tile.set_done(state == "done")
+        if self._status is not None and status_text:
+            self._status.setText(status_text)
 
 def _dialog_qss(mode: str) -> str:
     """Modal table dialogs follow the active theme (no forced Windows-white)."""
@@ -286,10 +322,11 @@ class Card(QFrame):
 
 
 class Chip(QLabel):
-    def __init__(self, text: str) -> None:
-        super().__init__(text)
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
         self.setObjectName("chip")
         self.setProperty("state", "idle")
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
 
     def set_state(self, ok: bool, text: str) -> None:
         self.setText(text)
@@ -318,21 +355,19 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("iCarcas")
         self.setWindowIcon(load_app_icon())
-        # Wider default: region chips + 3-button rows need room; 640 clipped the right edge.
-        self.resize(880, 780)
-        self.setMinimumSize(760, 560)
+        self.resize(980, 720)
+        self.setMinimumSize(860, 600)
 
         self._thread_pool = QThreadPool.globalInstance()
         self._packages_dir = packages_dir or (Path.cwd() / "packages")
         self._busy = False
         self._devices: list[DeviceInfo] = []
         self._package: PackageInfo | None = None
-        self._mode = mode if mode in PALETTES else "dark"
+        self._mode = mode if mode in ("light", "dark") else "dark"
         tools = default_tools_dir()
         self._device_adapter = DeviceCliAdapter(tools_dir=tools)
         self._appstore = AppStoreCliAdapter(tools_dir=tools)
         self._installer = InstallCliAdapter(tools_dir=tools)
-        # Умный поиск: локальный каталог ID + iTunes (ранжирование, без мусора).
         self._smart_search = SmartAppSearchService()
         self._license_check = LicenseCheckService()
         self._history = HistoryStore(self._packages_dir / "icarcas-history.json")
@@ -340,123 +375,159 @@ class MainWindow(QMainWindow):
         self._purchases_cache: list[PurchasedApp] | None = None
         self._account_storefront: str | None = None
         self._last_display_name: str | None = None
-        # Defer ToS/onboarding until the window is actually shown so BrandSplash
-        # can finish its layer animation on first run (singleShot(0) stole the
-        # event loop with a modal dialog while the splash was still up).
         self._bootstrap_scheduled = False
+        self._device_ok = False
+        self._trust_ok = False
+        self._trust_error: str | None = None
+        self._session_ok = False
+        self._session_label: str | None = None
+        self._versions_dump_path: Path | None = None
+        self._catalog_cache: list[CatalogApp] | None = None
+        self._download_poll: QTimer | None = None
+        self._download_started_at: float | None = None
+        self._download_last_bytes: int = 0
+        self._download_last_bytes_at: float | None = None
+        self._download_peak_bytes: int = 0
+
+        aui.set_theme(self._mode)
 
         shell = QWidget()
         shell.setObjectName("root")
         self.setCentralWidget(shell)
-        shell_layout = QVBoxLayout(shell)
+        shell_layout = QHBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
 
+        pages = [
+            ("Начало", "start", "orange"),
+            ("Устройство", "phone", "green"),
+            ("Apple ID", "person", "blue"),
+            ("Приложение", "app", "purple"),
+            ("Журнал", "log", "gray"),
+        ]
+        self.sidebar = Sidebar(pages, f"v{_app_version()}")
+        content = aui.styled(QWidget(), "content")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        self.progress = ProgressLine()
+        self.stack = FadeStack()
+        content_layout.addWidget(self.progress)
+        content_layout.addWidget(self.stack, 1)
+        shell_layout.addWidget(self.sidebar)
+        shell_layout.addWidget(content, 1)
+
+        self.tiles: dict[str, Tile] = {}
+        # Always parent early: orphan QLabels become tiny top-level windows on Windows.
+        self.flow_status = QLabel("", self)
+        self.flow_status.setObjectName("footnote")
+        self.chip_device = Chip("", self)
+        self.chip_session = Chip("", self)
+        self.chip_device.hide()
+        self.chip_session.hide()
+        self.stack.addWidget(self._build_page_start())
+        self.stack.addWidget(self._build_page_device())
+        self.stack.addWidget(self._build_page_store())
+        self.stack.addWidget(self._build_page_app())
+        self.stack.addWidget(self._build_page_log())
+        self.sidebar.selected.connect(self.stack.go)
+
+        # Aliases for busy toggles / older call sites.
+        self.device_button = self.btn_find
+        self.session_button = self.btn_login
+        self.detect_button = self.btn_find
+        self.pair_button = self.btn_trust
+        self.login_button = self.btn_login
+        self.auth_info_button = self.btn_check
+        self.logout_button = self.btn_logout
+        self.remember_pass_button = self.btn_save_pass
+        self.clear_pass_button = self.btn_clear_pass
+        self.open_help_button = self.help_button
+        self.open_release_notes_button = self.release_notes_button
+        self.card_store = _FlowCard(self.tiles, "B", self.flow_status)
+        self.card_app = _FlowCard(self.tiles, "C", self.flow_status)
+
+        self._refresh_theme_button()
+        self._refresh_passphrase_label()
+        self.set_session_chip(self._appstore.session_files_present())
+        self.set_device_chip(False)
+        # Defer CLI / dependency probes until after first paint (avoids console flashes
+        # while the brand splash is still running).
+        QTimer.singleShot(0, self._append_env_status)
+
+    def _wrap_scroll(self, page: Page) -> QScrollArea:
         scroll = QScrollArea()
-        scroll.setObjectName("mainScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        # Keep content within the viewport — horizontal scroll made the right edge look "eaten".
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        shell_layout.addWidget(scroll)
+        scroll.setWidget(page)
+        return scroll
 
-        central = QWidget()
-        central.setObjectName("root")
-        central.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        scroll.setWidget(central)
-
-        root = QVBoxLayout(central)
-        root.setContentsMargins(32, 28, 32, 28)
-        root.setSpacing(18)
-
-        header = QHBoxLayout()
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(14)
-        self.brand_mark = StackingLogoWidget(self, size=52)
-        self.brand_mark.set_progress(1.0)
-        brand_row.addWidget(self.brand_mark, 0, Qt.AlignmentFlag.AlignVCenter)
-        # Transparent PNG mark (no black plate) — works on light and dark.
-        self.brand_raster = QLabel()
-        self.brand_raster.setFixedSize(52, 52)
-        brand_row.addWidget(self.brand_raster, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._refresh_brand_mark()
-        titles = QVBoxLayout()
-        titles.setSpacing(3)
-        self.title_label = QLabel()
-        self.title_label.setObjectName("appTitle")
-        self.title_label.setTextFormat(Qt.TextFormat.RichText)
-        self._refresh_title()
-        sub = QLabel("Свои приложения из App Store на iPhone и iPad")
-        sub.setObjectName("appSubtitle")
-        sub.setWordWrap(True)
-        titles.addWidget(self.title_label)
-        titles.addWidget(sub)
-        brand_row.addLayout(titles, 1)
-        header.addLayout(brand_row, 1)
-
-        corner_row = QHBoxLayout()
-        corner_row.setSpacing(10)
-        self.device_button = make_corner_button("Устройство…")
-        self.device_button.setToolTip(
-            "iPhone или iPad: кабель USB, затем «Найти устройство». "
-            "Зелёный цвет — устройство найдено."
+    def _build_page_start(self) -> QWidget:
+        p = Page(
+            "Начало работы",
+            "Свои приложения из App Store на iPhone и iPad",
         )
-        self._rebuild_device_menu()
-        self.session_button = make_corner_button("Apple ID…")
-        self.session_button.setToolTip(
-            "Вход в ваш Apple ID. Зелёный цвет — вы вошли."
-        )
-        self._device_ok = False
-        self._session_ok = False
-        self._session_label: str | None = None
-        self._rebuild_session_menu()
-        corner_row.addWidget(self.device_button)
-        corner_row.addWidget(self.session_button)
-        header.addLayout(corner_row)
-        root.addLayout(header)
+        g = Group()
+        steps = [
+            ("A", "Подключите устройство", "USB-кабель, экран разблокирован", 1),
+            ("B", "Войдите в Apple ID", "Пароль и 2FA в консоли ipatool", 2),
+            ("C", "Выберите приложение", "Поиск ID, архив или bundle id", 3),
+            ("D", "Установите на устройство", "Нужны сессия и готовый IPA", 3),
+        ]
+        for letter, title, sub, page_idx in steps:
+            self.tiles[letter] = Tile("blue", letter)
+            row = Row(title, sub, lead=self.tiles[letter])
+            open_btn = AppleButton("Открыть", "plain")
+            open_btn.clicked.connect(
+                lambda _=False, i=page_idx: self.sidebar.select(i)
+            )
+            row.add_tail(open_btn)
+            g.add(row)
+        p.lay.addWidget(g)
+        p.lay.addWidget(self.flow_status)
 
-        # Full-width nav — do not pack under phone/Apple ID chips.
-        nav_row = QHBoxLayout()
-        nav_row.setSpacing(8)
-        self.open_setup_button = make_button("Впервые здесь?", "header")
-        self.open_setup_button.setProperty("emphasis", "1")
-        repolish(self.open_setup_button)
+        help_g = Group()
+        self.open_setup_button = AppleButton("Впервые здесь?")
         self.open_setup_button.setToolTip(
             "Первая подготовка компьютера: проверка и установка нужного одной кнопкой"
         )
         self.open_setup_button.clicked.connect(lambda: show_dependencies_dialog(self))
-        self.release_notes_button = make_button("Что нового", "header")
-        self.release_notes_button.setToolTip("Изменения с последнего релиза")
+        r_setup = Row("Подготовка ПК", "Утилиты, драйверы, ipatool")
+        r_setup.add_tail(self.open_setup_button)
+        help_g.add(r_setup)
+
+        self.release_notes_button = AppleButton("Что нового", "plain")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
-        self.help_button = make_button("Справка", "header")
-        self.help_button.setToolTip("Как пользоваться — простые шаги")
+        r_notes = Row("Обновления", "Изменения с последнего релиза")
+        r_notes.add_tail(self.release_notes_button)
+        help_g.add(r_notes)
+
+        self.help_button = AppleButton("Справка", "plain")
         self.help_button.clicked.connect(lambda: show_help_dialog(self))
-        self.replay_onboarding_button = make_button("Обучение", "header")
-        self.replay_onboarding_button.setToolTip("Повторить знакомство")
+        r_help = Row("Справка", "Как пользоваться — простые шаги")
+        r_help.add_tail(self.help_button)
+        help_g.add(r_help)
+
+        self.replay_onboarding_button = AppleButton("Обучение", "plain")
         self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
-        self.shortcut_button = make_button("Ярлык", "header")
-        self.shortcut_button.setToolTip("Создать ярлык iCarcas на рабочем столе")
+        r_onb = Row("Обучение", "Повторить знакомство")
+        r_onb.add_tail(self.replay_onboarding_button)
+        help_g.add(r_onb)
+
+        self.shortcut_button = AppleButton("Ярлык", "plain")
         self.shortcut_button.clicked.connect(self._on_create_desktop_shortcut)
-        self.theme_button = make_button("", "header")
+        r_short = Row("Ярлык", "На рабочий стол")
+        r_short.add_tail(self.shortcut_button)
+        help_g.add(r_short)
+
+        self.theme_button = AppleButton("", "plain")
         self.theme_button.setToolTip("Переключить светлую / тёмную тему")
         self.theme_button.clicked.connect(self._toggle_theme)
-        self._refresh_theme_button()
-        # Aliases: old help-card buttons removed (they duplicated this nav row).
-        self.open_help_button = self.help_button
-        self.open_release_notes_button = self.release_notes_button
-        for btn in (
-            self.open_setup_button,
-            self.release_notes_button,
-            self.help_button,
-            self.replay_onboarding_button,
-            self.shortcut_button,
-            self.theme_button,
-        ):
-            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-            nav_row.addWidget(btn)
-        nav_row.addStretch(1)
-        root.addLayout(nav_row)
+        r_theme = Row("Тема", "Светлая или тёмная")
+        r_theme.add_tail(self.theme_button)
+        help_g.add(r_theme)
+        p.lay.addWidget(help_g)
 
         self.privacy_label = QLabel(
             "Учётные данные и ключ сессии хранятся только на этом компьютере "
@@ -464,45 +535,95 @@ class MainWindow(QMainWindow):
         )
         self.privacy_label.setObjectName("privacyNotice")
         self.privacy_label.setWordWrap(True)
-        root.addWidget(self.privacy_label)
+        p.lay.addWidget(self.privacy_label)
+        p.lay.addStretch(1)
+        return self._wrap_scroll(p)
 
-        # Kept as aliases for older call sites / busy toggles (hidden, menu-driven).
-        self.detect_button = self.device_button
-        self.pair_button = self.device_button
-        self.login_button = self.session_button
-        self.auth_info_button = self.session_button
-        self.logout_button = self.session_button
-        self.remember_pass_button = self.session_button
-        self.clear_pass_button = self.session_button
-        self.chip_device = Chip("")
-        self.chip_session = Chip("")
-        self.chip_device.hide()
-        self.chip_session.hide()
-        self.passphrase_chip = QLabel()
-        self.passphrase_chip.hide()
-        self._refresh_passphrase_label()
+    def _build_page_device(self) -> QWidget:
+        p = Page("Устройство", "Подключение iPhone или iPad к этому компьютеру")
+        g = Group()
+        self.row_device = Row("Устройство", "Не найдено", dot=True)
+        self.btn_find = self.row_device.add_tail(AppleButton("Найти устройство"))
+        self.btn_find.clicked.connect(self._on_detect)
+        self.row_trust = Row(
+            "Доверие к компьютеру",
+            "Сначала найдите устройство",
+            dot=True,
+        )
+        self.btn_trust = self.row_trust.add_tail(AppleButton("Установить доверие"))
+        self.btn_trust.clicked.connect(self._on_pair)
+        g.add(self.row_device)
+        g.add(self.row_trust)
+        p.lay.addWidget(g)
+        p.lay.addStretch(1)
+        return self._wrap_scroll(p)
 
-        self.card_store = Card("Поиск", step=1)
-        archive_row = QHBoxLayout()
-        archive_row.setSpacing(10)
-        self.archive_button = make_button("Архив покупок…")
-        self.archive_button.setToolTip("Список приложений с лицензией на этом Apple ID")
+    def _build_page_store(self) -> QWidget:
+        p = Page("Apple ID", "Сессия App Store для загрузки ваших приложений")
+        g = Group()
+        self.row_session = Row("Сессия", "Не проверена", dot=True)
+        self.btn_check = self.row_session.add_tail(AppleButton("Проверить…"))
+        self.btn_check.clicked.connect(self._on_auth_info)
+
+        self.row_login = Row("Вход", "Откроется консоль ipatool")
+        self.btn_login = self.row_login.add_tail(AppleButton("Войти…", "filled"))
+        self.btn_login.clicked.connect(self._on_login)
+
+        self.row_logout = Row("Выход", "Завершить сессию ipatool")
+        self.btn_logout = self.row_logout.add_tail(AppleButton("Выйти…", "danger"))
+        self.btn_logout.clicked.connect(self._on_logout)
+
+        r_pass = Row("Ключ сессии", "На этом компьютере")
+        # Reuse Row subtitle label as passphrase status chip.
+        self.passphrase_chip = r_pass.sub
+        self.passphrase_chip.setObjectName("rowSub")
+        self.btn_save_pass = AppleButton("Запомнить…", "plain")
+        self.btn_save_pass.clicked.connect(self._on_save_passphrase)
+        self.btn_clear_pass = AppleButton("Забыть", "plain")
+        self.btn_clear_pass.clicked.connect(self._on_clear_passphrase)
+        r_pass.add_tail(self.btn_save_pass)
+        r_pass.add_tail(self.btn_clear_pass)
+
+        for r in (self.row_session, self.row_login, self.row_logout, r_pass):
+            g.add(r)
+        p.lay.addWidget(g)
+
+        arch = Group()
+        r_arch = Row("Архив покупок", "Приложения с лицензией на этом Apple ID")
+        self.archive_button = AppleButton("Архив…")
         self.archive_button.clicked.connect(self._on_archive_purchases)
-        self.pickup_archive_button = make_button("Подхватить архив")
-        self.pickup_archive_button.setToolTip("Показать результат после дампа покупок")
+        self.pickup_archive_button = AppleButton("Подхватить", "plain")
         self.pickup_archive_button.clicked.connect(self._on_pickup_purchases_dump)
-        archive_row.addWidget(self.archive_button, 1)
-        archive_row.addWidget(self.pickup_archive_button, 1)
-        self.card_store.body.addLayout(archive_row)
+        r_arch.add_tail(self.archive_button)
+        r_arch.add_tail(self.pickup_archive_button)
+        arch.add(r_arch)
+        p.lay.addWidget(arch)
 
+        note = QLabel(
+            "Пароль, 2FA и Keychain passphrase вводятся только в консоли ipatool."
+        )
+        note.setObjectName("footnote")
+        note.setWordWrap(True)
+        p.lay.addWidget(note)
+        p.lay.addStretch(1)
+        return self._wrap_scroll(p)
+
+    def _build_page_app(self) -> QWidget:
+        p = Page("Приложение", "Поиск, загрузка IPA и установка на устройство")
+
+        search_g = Group()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(
             "Название или коротко: МЭШ, Матч, Store ID, bundle…"
         )
         self.search_input.setClearButtonEnabled(True)
+        search_g.add(self.search_input)
+
         self._region_code = "RU"
         self._region_tags: dict[str, QPushButton] = {}
-        region_grid = QGridLayout()
+        region_wrap = QWidget()
+        region_grid = QGridLayout(region_wrap)
+        region_grid.setContentsMargins(12, 8, 12, 8)
         region_grid.setHorizontalSpacing(6)
         region_grid.setVerticalSpacing(6)
         region_cols = 4
@@ -510,7 +631,6 @@ class MainWindow(QMainWindow):
             tag = QPushButton(region.name)
             tag.setObjectName("regionTag")
             tag.setCursor(Qt.CursorShape.PointingHandCursor)
-            tag.setCheckable(False)
             tag.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             tag.setToolTip(f"Регион App Store: {region.name} ({region.code})")
             tag.clicked.connect(
@@ -518,26 +638,24 @@ class MainWindow(QMainWindow):
             )
             self._region_tags[region.code] = tag
             region_grid.addWidget(tag, index // region_cols, index % region_cols)
+        search_g.add(region_wrap)
         self._select_region("RU")
-        self.regional_search_button = make_button("Найти ID…", "primary")
-        self.regional_search_button.clicked.connect(self._on_regional_search_app)
-        self.regional_search_button.setToolTip(
-            "Найти Store ID. Скачивание — только при лицензии на аккаунте."
-        )
-        self.card_store.body.addWidget(self.search_input)
-        self.card_store.body.addLayout(region_grid)
-        self.card_store.body.addWidget(self.regional_search_button)
-        self.card_store.set_state("active")
-        root.addWidget(self.card_store)
-        repolish(self.regional_search_button)
 
-        self.card_app = Card("Приложение", step=2)
+        r_find = Row("Поиск Store ID", "Скачивание — только при лицензии на аккаунте")
+        self.regional_search_button = AppleButton("Найти ID…", "filled")
+        self.regional_search_button.clicked.connect(self._on_regional_search_app)
+        r_find.add_tail(self.regional_search_button)
+        search_g.add(r_find)
+        p.lay.addWidget(search_g)
+
+        app_g = Group()
         self.app_input = QLineEdit()
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
         )
         self.app_input.setClearButtonEnabled(True)
-        self.card_app.body.addWidget(self.app_input)
+        app_g.add(self.app_input)
+
         self.try_purchase_check = QCheckBox(
             "Попробовать оформить лицензию в текущем регионе"
         )
@@ -545,52 +663,53 @@ class MainWindow(QMainWindow):
             "Только если приложение доступно на витрине текущего Apple ID. "
             "Чужой регион не открывает."
         )
-        self.card_app.body.addWidget(self.try_purchase_check)
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.download_button = make_button("Скачать IPA…")
+        check_wrap = QWidget()
+        check_lay = QHBoxLayout(check_wrap)
+        check_lay.setContentsMargins(16, 8, 16, 8)
+        check_lay.addWidget(self.try_purchase_check)
+        app_g.add(check_wrap)
+
+        r_dl = Row("Загрузка", "Скачать IPA из вашей библиотеки")
+        self.download_button = AppleButton("Скачать IPA…")
         self.download_button.clicked.connect(self._on_download)
-        self.pickup_button = make_button("Подхватить IPA")
+        r_dl.add_tail(self.download_button)
+        app_g.add(r_dl)
+
+        r_pick = Row("Готовый файл", "Использовать уже скачанный IPA")
+        self.pickup_button = AppleButton("Подхватить IPA", "plain")
         self.pickup_button.clicked.connect(self._on_pickup_ipa)
-        self.history_button = make_button("История…")
-        self.history_button.setToolTip("Последние скачивания и установки")
+        self.history_button = AppleButton("История…", "plain")
         self.history_button.clicked.connect(self._on_open_history)
-        row.addWidget(self.download_button, 1)
-        row.addWidget(self.pickup_button, 1)
-        row.addWidget(self.history_button, 1)
-        self.card_app.body.addLayout(row)
-        versions_row = QHBoxLayout()
-        versions_row.setSpacing(10)
-        self.versions_button = make_button("Версии…")
-        self.versions_button.setToolTip(
-            "list-versions: дамп доступных версий для числового Store ID "
-            "(нужна сессия; затем «Подхватить версии»)"
-        )
+        r_pick.add_tail(self.pickup_button)
+        r_pick.add_tail(self.history_button)
+        app_g.add(r_pick)
+
+        r_ver = Row("Версии и каталог", "list-versions и локальный список Store ID")
+        self.versions_button = AppleButton("Версии…", "plain")
         self.versions_button.clicked.connect(self._on_list_versions)
-        self.pickup_versions_button = make_button("Подхватить версии")
+        self.pickup_versions_button = AppleButton("Подхватить", "plain")
         self.pickup_versions_button.clicked.connect(self._on_pickup_versions)
-        self.catalog_button = make_button("Каталог ID…")
-        self.catalog_button.setToolTip(
-            "Локальный список Store ID (как AppsList у IPA_Downloader). "
-            "Мультивыбор → массовая загрузка."
-        )
+        self.catalog_button = AppleButton("Каталог…", "plain")
         self.catalog_button.clicked.connect(self._on_open_catalog)
-        versions_row.addWidget(self.versions_button, 1)
-        versions_row.addWidget(self.pickup_versions_button, 1)
-        versions_row.addWidget(self.catalog_button, 1)
-        self.card_app.body.addLayout(versions_row)
+        r_ver.add_tail(self.versions_button)
+        r_ver.add_tail(self.pickup_versions_button)
+        r_ver.add_tail(self.catalog_button)
+        app_g.add(r_ver)
+        p.lay.addWidget(app_g)
+
         self.download_status_panel = QFrame()
         self.download_status_panel.setObjectName("downloadStatusPanel")
         self.download_status_panel.setProperty("phase", "idle")
         dl_status_layout = QVBoxLayout(self.download_status_panel)
-        dl_status_layout.setContentsMargins(12, 10, 12, 10)
+        dl_status_layout.setContentsMargins(14, 12, 14, 12)
         dl_status_layout.setSpacing(6)
         self.download_state_title = QLabel("Загрузка не запущена")
         self.download_state_title.setObjectName("downloadStateTitle")
         self.download_state_title.setProperty("phase", "idle")
         dl_status_layout.addWidget(self.download_state_title)
         self.download_state_detail = QLabel(
-            "После «Скачать IPA…» здесь будет видно: идёт ли закачка, сколько МБ и сколько времени прошло."
+            "После «Скачать IPA…» здесь будет видно: идёт ли закачка, "
+            "сколько МБ и сколько времени прошло."
         )
         self.download_state_detail.setObjectName("downloadStateDetail")
         self.download_state_detail.setWordWrap(True)
@@ -606,46 +725,39 @@ class MainWindow(QMainWindow):
         self.download_progress_label.setObjectName("downloadProgressLabel")
         self.download_progress_label.setWordWrap(True)
         dl_status_layout.addWidget(self.download_progress_label)
-        self.card_app.body.addWidget(self.download_status_panel)
-        dl_ctrl = QHBoxLayout()
-        dl_ctrl.setSpacing(10)
-        self.cancel_download_button = make_button("Отменить загрузку", "danger")
+        p.lay.addWidget(self.download_status_panel)
+
+        ctrl = Group()
+        r_ctrl = Row("Управление загрузкой", "")
+        self.cancel_download_button = AppleButton("Отменить", "danger")
         self.cancel_download_button.setEnabled(False)
         self.cancel_download_button.clicked.connect(self._on_cancel_download)
-        self.diag_button = make_button("Диагностика…", "ghost")
+        self.diag_button = AppleButton("Диагностика…", "plain")
         self.diag_button.clicked.connect(self._on_export_diagnostics)
-        dl_ctrl.addWidget(self.cancel_download_button, 1)
-        dl_ctrl.addWidget(self.diag_button, 1)
-        self.card_app.body.addLayout(dl_ctrl)
-        self.install_button = make_button("Установить на устройство", "primary")
+        r_ctrl.add_tail(self.cancel_download_button)
+        r_ctrl.add_tail(self.diag_button)
+        ctrl.add(r_ctrl)
+        p.lay.addWidget(ctrl)
+
+        self.install_button = AppleButton(
+            "Установить на устройство", "filled", large=True
+        )
         self.install_button.setEnabled(False)
         self.install_button.clicked.connect(self._on_install)
-        self.card_app.body.addWidget(self.install_button)
-        root.addWidget(self.card_app)
-        self._versions_dump_path: Path | None = None
-        self._catalog_cache: list[CatalogApp] | None = None
-        self._download_poll: QTimer | None = None
-        self._download_started_at: float | None = None
-        self._download_last_bytes: int = 0
-        self._download_last_bytes_at: float | None = None
-        self._download_peak_bytes: int = 0
+        p.lay.addWidget(self.install_button)
+        p.lay.addStretch(1)
+        return self._wrap_scroll(p)
 
-        log_card = Card("Журнал")
-        self.btn_clear_log = make_button("Очистить", "ghost")
-        head_layout = log_card.layout().itemAt(0).layout()
-        assert isinstance(head_layout, QHBoxLayout)
-        head_layout.insertWidget(2, self.btn_clear_log)
+    def _build_page_log(self) -> QWidget:
+        p = Page("Журнал", "Вывод утилит и ipatool")
+        self.btn_clear_log = AppleButton("Очистить", "plain")
+        p.head_tail.addWidget(self.btn_clear_log)
         self.output = QPlainTextEdit()
         self.output.setObjectName("log")
         self.output.setReadOnly(True)
-        self.output.setMinimumHeight(140)
-        log_card.body.addWidget(self.output)
         self.btn_clear_log.clicked.connect(self.output.clear)
-        root.addWidget(log_card, 1)
-
-        self._append_env_status()
-        session_ok = self._appstore.session_files_present()
-        self.set_session_chip(session_ok)
+        p.lay.addWidget(self.output, 1)
+        return p
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -654,32 +766,7 @@ class MainWindow(QMainWindow):
         self._bootstrap_scheduled = True
         QTimer.singleShot(0, self._bootstrap_tos_and_session)
 
-    def _refresh_title(self) -> None:
-        accent = PALETTES[self._mode]["accent"]
-        self.title_label.setText(f'<span style="color:{accent}">i</span>Carcas')
-
-    def _refresh_brand_mark(self) -> None:
-        """Header mark: transparent raster if present, else procedural stack."""
-        from PySide6.QtGui import QPixmap
-
-        png = icon_png_path(transparent=True)
-        if png.is_file():
-            pix = QPixmap(str(png)).scaled(
-                52,
-                52,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.brand_raster.setPixmap(pix)
-            self.brand_raster.show()
-            self.brand_mark.hide()
-            return
-        self.brand_raster.hide()
-        self.brand_mark.set_progress(1.0)
-        self.brand_mark.show()
-
     def _refresh_theme_button(self) -> None:
-        # Short label — long "Тёмная тема" was clipped in the header.
         if self._mode == "dark":
             self.theme_button.setText("Светлая")
         else:
@@ -689,87 +776,110 @@ class MainWindow(QMainWindow):
         self.apply_theme("light" if self._mode == "dark" else "dark")
 
     def apply_theme(self, mode: str) -> None:
-        if mode not in PALETTES:
+        if mode not in ("light", "dark"):
             mode = "dark"
         self._mode = mode
+        aui.set_theme(mode)
         app = QApplication.instance()
         if app is not None:
-            app.setPalette(build_palette(mode))
-            app.setStyleSheet(build_stylesheet(mode))
-        self._refresh_title()
+            # Fusion palette from theme.py keeps dialogs readable.
+            if mode in PALETTES:
+                app.setPalette(build_palette(mode))
+            app.setStyleSheet(aui.qss())
+        self.sidebar.retheme()
         self._refresh_theme_button()
-        self._refresh_brand_mark()
-        self._rebuild_device_menu()
-        self._rebuild_session_menu()
-        # Dynamic properties (chips / badges) need a polish pass after QSS swap.
         for widget in self.findChildren(QWidget):
-            if widget.property("state") is not None or widget.property("variant") is not None:
+            widget.update()
+            if widget.property("state") is not None:
                 repolish(widget)
         QSettings("iCarcas", "iCarcas").setValue("theme", mode)
 
     def log(self, text: str) -> None:
         self.output.appendPlainText(text)
 
-    def _theme_menu(self) -> QMenu:
-        """Popup menu with theme colors (app palette stays light for dialogs)."""
-        menu = QMenu(self)
-        p = PALETTES[self._mode]
-        pal = QPalette(menu.palette())
-        pal.setColor(QPalette.ColorRole.Window, QColor(p["surface"]))
-        pal.setColor(QPalette.ColorRole.Base, QColor(p["surface"]))
-        pal.setColor(QPalette.ColorRole.Text, QColor(p["text"]))
-        pal.setColor(QPalette.ColorRole.WindowText, QColor(p["text"]))
-        pal.setColor(QPalette.ColorRole.ButtonText, QColor(p["text"]))
-        pal.setColor(QPalette.ColorRole.Highlight, QColor(p["hover"]))
-        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(p["text"]))
-        menu.setPalette(pal)
-        return menu
-
-    def _rebuild_device_menu(self) -> None:
-        menu = self._theme_menu()
-        menu.addAction("Найти устройство", self._on_detect)
-        menu.addAction("Разрешить доверие на устройстве", self._on_pair)
-        self.device_button.setMenu(menu)
-
-    def _rebuild_session_menu(self) -> None:
-        menu = self._theme_menu()
-        if self._session_ok:
-            menu.addAction("Проверить вход…", self._on_auth_info)
-            menu.addAction("Войти снова…", self._on_login)
-            menu.addSeparator()
-            menu.addAction("Запомнить ключ…", self._on_save_passphrase)
-            menu.addAction("Забыть ключ", self._on_clear_passphrase)
-            menu.addSeparator()
-            menu.addAction("Выйти…", self._on_logout)
-        else:
-            menu.addAction("Войти в Apple ID…", self._on_login)
-            menu.addAction("Проверить вход…", self._on_auth_info)
-            menu.addSeparator()
-            menu.addAction("Запомнить ключ…", self._on_save_passphrase)
-            menu.addAction("Забыть ключ", self._on_clear_passphrase)
-        self.session_button.setMenu(menu)
-
-    def _paint_device_corner(self, *, state: str, text: str) -> None:
-        self.device_button.setText(text)
-        self.device_button.setProperty("state", state)
-        repolish(self.device_button)
-
     def set_device_working(self, text: str) -> None:
-        """Green highlight while detecting / pairing."""
-        self._paint_device_corner(state="busy", text=text)
+        self.row_device.set_sub(text)
+        if self.row_device.dot is not None:
+            self.row_device.dot.set_state("busy")
 
-    def set_device_chip(self, found: bool, name: str = "") -> None:
-        self._device_ok = found
-        if found and name:
-            label = name if len(name) <= 22 else name[:20] + "…"
-        elif found:
-            label = "Устройство ✓"
+    @staticmethod
+    def _style_apple_button(button: AppleButton, text: str, kind: str) -> None:
+        button.setText(text)
+        button.kind = kind
+        button.update()
+        button.updateGeometry()
+
+    def _refresh_device_actions(self) -> None:
+        if self.row_trust.dot is None:
+            return
+        if self._device_ok and self._trust_ok:
+            self.row_trust.set_sub("Готово")
+            self.row_trust.dot.set_state("on")
+            self.btn_trust.hide()
+            self._style_apple_button(self.btn_find, "Обновить", "plain")
+            return
+        if self._device_ok:
+            self.row_trust.set_sub(
+                self._trust_error
+                or "На устройстве нажмите «Доверять», затем эту кнопку"
+            )
+            self.row_trust.dot.set_state("off")
+            self.btn_trust.show()
+            self._style_apple_button(self.btn_trust, "Установить доверие", "filled")
+            self._style_apple_button(self.btn_find, "Обновить", "plain")
+            return
+        self.row_trust.set_sub("Сначала найдите устройство")
+        self.row_trust.dot.set_state("off")
+        self.btn_trust.hide()
+        self._style_apple_button(self.btn_find, "Найти устройство", "filled")
+
+    def _refresh_session_actions(self) -> None:
+        if self._session_ok:
+            self.row_login.hide()
+            self.row_logout.show()
+            self.row_logout.set_sub("Завершить текущую сессию")
+            self._style_apple_button(self.btn_logout, "Выйти…", "danger")
+            self._style_apple_button(self.btn_check, "Проверить…", "plain")
         else:
-            label = "Устройство…"
-        self._paint_device_corner(state="ok" if found else "idle", text=label)
+            self.row_login.show()
+            self.row_login.set_sub("Откроется консоль ipatool")
+            self._style_apple_button(self.btn_login, "Войти…", "filled")
+            self.row_logout.hide()
+            self._style_apple_button(self.btn_check, "Проверить…", "plain")
+
+    def set_device_chip(
+        self,
+        found: bool,
+        name: str = "",
+        *,
+        trust_ok: bool | None = None,
+        trust_error: str | None = None,
+    ) -> None:
+        self._device_ok = found
+        if trust_error is not None:
+            self._trust_error = trust_error or None
+        if not found:
+            self._trust_ok = False
+            self._trust_error = None
+        elif trust_ok is not None:
+            self._trust_ok = trust_ok
+            if trust_ok:
+                self._trust_error = None
+        if found and name:
+            label = name
+        elif found:
+            label = "Подключено"
+        else:
+            label = "Не найдено"
+        self.row_device.set_sub(label)
+        if self.row_device.dot is not None:
+            self.row_device.dot.set_state("on" if found else "off")
         self.chip_device.set_state(found, label)
-        if found:
-            self.card_store.set_state("active")
+        self._refresh_device_actions()
+        if "A" in self.tiles:
+            self.tiles["A"].set_done(found and self._trust_ok)
+        if found and self._trust_ok:
+            self.card_app.set_state("active")
 
     def set_session_chip(self, ok: bool, detail: str | None = None) -> None:
         if detail:
@@ -778,21 +888,20 @@ class MainWindow(QMainWindow):
             self._session_label = None
         self._session_ok = ok
         if ok:
-            label = self._session_label or "Apple ID ✓"
-            if len(label) > 24:
-                label = label[:22] + "…"
+            label = self._session_label or "Вход выполнен"
+            if label.strip().casefold() in {"сессия ok", "сессияok", "ok"}:
+                label = "Вход выполнен"
         else:
-            label = "Apple ID…"
-        self.session_button.setText(label)
-        self.session_button.setProperty("state", "ok" if ok else "idle")
-        repolish(self.session_button)
+            label = "Нужен вход"
+        self.row_session.set_sub(label)
+        if self.row_session.dot is not None:
+            self.row_session.dot.set_state("on" if ok else "off")
         self.chip_session.set_state(ok, label)
-        self._rebuild_session_menu()
         self._refresh_passphrase_label()
-        self.card_store.set_state(
-            "done" if ok else "active",
-            "Готово" if ok else "",
-        )
+        self._refresh_session_actions()
+        if "B" in self.tiles:
+            self.tiles["B"].set_done(ok)
+        self.card_store.set_state("done" if ok else "active", "Готово" if ok else "")
         if ok:
             self.card_app.set_state("active")
         self.archive_button.setEnabled(ok)
@@ -974,7 +1083,7 @@ class MainWindow(QMainWindow):
         email = str(info.get("email") or "")
         storefront = str(info.get("storefront") or "")
         self._account_storefront = storefront.upper() if storefront else self._account_storefront
-        detail = "Сессия OK"
+        detail = "Вход выполнен"
         if email:
             detail = email
         if storefront:
@@ -2432,14 +2541,24 @@ class MainWindow(QMainWindow):
                     f"- {device.display_name} | UDID={device.device_id} | "
                     f"iOS={device.os_version or '?'} | {avail}"
                 )
-            self.set_device_chip(True, devices[0].display_name)
+            first = devices[0]
+            self.set_device_chip(
+                True,
+                first.display_name,
+                trust_ok=bool(first.available_for_operations),
+            )
             self.output.setPlainText("\n".join(lines))
         self._set_busy(False)
 
     def _on_paired(self, device: object) -> None:
         assert isinstance(device, DeviceInfo)
         self._devices = [device]
-        self.set_device_chip(True, device.display_name)
+        self.set_device_chip(
+            True,
+            device.display_name,
+            trust_ok=True,
+            trust_error="",
+        )
         self.output.setPlainText(
             "Доверие OK.\n"
             f"{device.display_name} | {device.device_id} | iOS {device.os_version or '?'}"
@@ -2450,6 +2569,8 @@ class MainWindow(QMainWindow):
         self._package = package
         self.install_button.setEnabled(True)
         self.card_app.set_state("done", "IPA готов")
+        if "C" in self.tiles:
+            self.tiles["C"].set_done(True)
         name = Path(package.local_path).name
         mb = package.size_bytes / (1024 * 1024)
         store_id = getattr(self, "_download_store_id", None)
@@ -2501,6 +2622,8 @@ class MainWindow(QMainWindow):
                 version=pkg.version,
             )
         self._set_busy(False)
+        if "D" in self.tiles:
+            self.tiles["D"].set_done(True)
         show_install_success_dialog(
             self,
             app_name=str(app_name),
@@ -2516,9 +2639,31 @@ class MainWindow(QMainWindow):
 
     def _on_device_worker_failed(self, message: str) -> None:
         name = ""
+        trust_ok = False
         if self._devices:
             name = self._devices[0].display_name
-        self.set_device_chip(self._device_ok and bool(self._devices), name)
+            trust_ok = bool(self._devices[0].available_for_operations)
+        lower = message.casefold()
+        trust_err = None
+        if any(
+            key in lower
+            for key in (
+                "trust",
+                "pair",
+                "довер",
+                "сопряж",
+                "password protected",
+                "lockdownd",
+            )
+        ):
+            trust_err = message.strip().splitlines()[0][:160]
+            trust_ok = False
+        self.set_device_chip(
+            self._device_ok and bool(self._devices),
+            name,
+            trust_ok=trust_ok if self._devices else False,
+            trust_error=trust_err if trust_err is not None else None,
+        )
         self._on_worker_failed(message)
 
     def _on_worker_failed(self, message: str) -> None:
@@ -2545,10 +2690,16 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool, status: str | None = None) -> None:
         self._busy = busy
+        self.progress.set_busy(busy)
         session_ok = self._appstore.session_files_present()
         for btn in (
-            self.device_button,
-            self.session_button,
+            self.btn_find,
+            self.btn_trust,
+            self.btn_login,
+            self.btn_check,
+            self.btn_logout,
+            self.btn_save_pass,
+            self.btn_clear_pass,
             self.download_button,
             self.pickup_button,
             self.history_button,
@@ -2563,14 +2714,18 @@ class MainWindow(QMainWindow):
             self.diag_button,
             self.help_button,
             self.release_notes_button,
-            self.open_help_button,
-            self.open_release_notes_button,
+            self.open_setup_button,
             self.replay_onboarding_button,
             self.shortcut_button,
+            self.theme_button,
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)
-            elif btn in (self.archive_button, self.pickup_archive_button, self.versions_button):
+            elif btn in (
+                self.archive_button,
+                self.pickup_archive_button,
+                self.versions_button,
+            ):
                 btn.setEnabled((not busy) and session_ok)
             else:
                 btn.setEnabled(not busy)

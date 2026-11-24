@@ -16,6 +16,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
+    QGuiApplication,
     QIcon,
     QLinearGradient,
     QPainter,
@@ -263,15 +264,21 @@ class BrandSplash(QWidget):
     ) -> None:
         super().__init__(parent)
         self._on_finished = on_finished
+        self._closed = False
+        self.setObjectName("BrandSplash")
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.SplashScreen
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.SplashScreen
+            | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         from ios_restore.ui.theme import PALETTES
 
         p = PALETTES["dark" if mode == "dark" else "light"]
         bg, fg, muted, accent = p["bg"], p["text"], p["muted"], p["accent"]
-        self.setStyleSheet(f"BrandSplash {{ background: {bg}; }}")
+        self.setStyleSheet(
+            f"QWidget#BrandSplash {{ background-color: {bg}; }}"
+        )
         self.setFixedSize(520, 480)
 
         layout = QVBoxLayout(self)
@@ -282,7 +289,7 @@ class BrandSplash(QWidget):
         self.logo = StackingLogoWidget(self, width=280, height=230)
         layout.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        title = QLabel()
+        title = QLabel(self)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setText(
@@ -294,7 +301,7 @@ class BrandSplash(QWidget):
         )
         layout.addWidget(title)
 
-        sub = QLabel("Загрузка…")
+        sub = QLabel("Загрузка…", self)
         sub.setObjectName("splashSub")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet(f"color: {muted}; font-size: 13px;")
@@ -302,13 +309,35 @@ class BrandSplash(QWidget):
         layout.addStretch(1)
 
         self.logo._anim.finished.connect(self._finish)  # noqa: SLF001
-        QTimer.singleShot(50, self.logo.play)
+        self._center_on_screen()
+
+    def _center_on_screen(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        self.move(
+            geo.center().x() - self.width() // 2,
+            geo.center().y() - self.height() // 2,
+        )
+
+    def start(self) -> None:
+        """Show a fully composed frame, then start the layer animation."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QTimer.singleShot(40, self.logo.play)
 
     def _finish(self) -> None:
         # Brief hold on the assembled mark before opening the main window.
         QTimer.singleShot(280, self._close_and_continue)
 
     def _close_and_continue(self) -> None:
-        if self._on_finished:
-            self._on_finished()
+        if self._closed:
+            return
+        self._closed = True
+        callback = self._on_finished
+        self.hide()
+        if callback:
+            callback()
         self.close()

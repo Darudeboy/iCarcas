@@ -20,8 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
+    from PySide6.QtGui import QFont
+
+    from ios_restore.ui import apple_ui as aui
     from ios_restore.ui.main_window import MainWindow
-    from ios_restore.ui.theme import PALETTES, build_palette, build_stylesheet
+    from ios_restore.ui.theme import PALETTES, build_palette
 
     settings = QSettings("iCarcas", "iCarcas")
     if "--light" in argv:
@@ -30,40 +33,63 @@ def main(argv: list[str] | None = None) -> int:
         mode = "dark"
     else:
         saved = str(settings.value("theme", "dark"))
-        mode = saved if saved in PALETTES else "dark"
+        mode = saved if saved in ("light", "dark") else "dark"
 
     app = QApplication(sys.argv)
     app.setApplicationName("iCarcas")
     app.setOrganizationName("iCarcas")
     # Fusion + matching palette: QMessageBox/QMenu follow theme (no white-on-white)
     app.setStyle("Fusion")
+    font = QFont()
+    font.setFamilies(
+        [
+            "SF Pro Text",
+            "Segoe UI Variable Text",
+            "Segoe UI",
+            "Helvetica Neue",
+            "Arial",
+        ]
+    )
+    font.setPixelSize(13)
+    app.setFont(font)
 
     from ios_restore.ui.brand_icon import BrandSplash, load_app_icon
 
     app_icon = load_app_icon()
     app.setWindowIcon(app_icon)
 
-    app.setPalette(build_palette(mode))
-    app.setStyleSheet(build_stylesheet(mode))
-
-    window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
-    window.setWindowIcon(app_icon)
+    aui.set_theme(mode)
+    if mode in PALETTES:
+        app.setPalette(build_palette(mode))
+    app.setStyleSheet(aui.qss())
 
     skip_splash = "--no-splash" in argv
+    state: dict = {"window": None, "splash_done": skip_splash}
 
-    def _show_main() -> None:
+    def _try_show_main() -> None:
+        window = state["window"]
+        if window is None or not state["splash_done"]:
+            return
         window.show()
         window.raise_()
         window.activateWindow()
 
-    if skip_splash:
-        _show_main()
-    else:
-        splash = BrandSplash(mode=mode, on_finished=_show_main)
+    def _on_splash_finished() -> None:
+        state["splash_done"] = True
+        _try_show_main()
+
+    if not skip_splash:
+        splash = BrandSplash(mode=mode, on_finished=_on_splash_finished)
         splash.setWindowIcon(app_icon)
-        splash.show()
-        # Keep splash referenced for the event loop.
+        splash.start()
+        app.processEvents()
         app._icarcas_splash = splash  # type: ignore[attr-defined]
+
+    # Build the main window while splash is already on screen (no orphan flashes first).
+    window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
+    window.setWindowIcon(app_icon)
+    state["window"] = window
+    _try_show_main()
 
     return app.exec()
 

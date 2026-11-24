@@ -89,18 +89,24 @@ class ProcessRunner:
         with self._lock:
             self._cancel_requested = False
 
-        try:
-            proc = self._popen_factory(
-                list(command),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                cwd=str(cwd) if cwd else None,
-                env=env,
+        popen_kwargs: dict = {
+            "args": list(command),
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "shell": False,
+            "cwd": str(cwd) if cwd else None,
+            "env": env,
+        }
+        # Avoid black console flashes on Windows when spawning CLI helpers.
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(
+                subprocess, "CREATE_NO_WINDOW", 0x08000000
             )
+        try:
+            proc = self._popen_factory(**popen_kwargs)
         except FileNotFoundError as exc:
             raise RestoreError(
                 ErrorCode.TOOL_NOT_FOUND,
