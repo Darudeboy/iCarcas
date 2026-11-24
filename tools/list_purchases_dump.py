@@ -111,7 +111,7 @@ def main() -> int:
 
     out_file.write_text(json.dumps(all_apps, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\nSaved {len(all_apps)} apps to {out_file}")
-    print("DONE. Return to iCarcas and click «Подхватить архив».")
+    print("DONE. Then click Podhvatit arhiv in iCarcas.")
     return 0
 
 

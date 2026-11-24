@@ -62,8 +62,10 @@ while ($true) {
     if ($page -gt 200) { break }
 }
 
-$all | ConvertTo-Json -Depth 6 | Set-Content -Path $outFile -Encoding UTF8
+$json = $all | ConvertTo-Json -Depth 6
+# UTF-8 without wrong OEM conversion — Cyrillic app names stay readable in iCarcas.
+[System.IO.File]::WriteAllText($outFile, $json, (New-Object System.Text.UTF8Encoding $false))
 Write-Host ""
 Write-Host "Saved $($all.Count) apps to $outFile"
-Write-Host "DONE. Close this window, then click «Подхватить архив» in iCarcas."
-pause
+Write-Host "DONE. Then click Podhvatit arhiv in iCarcas."
+# Window close is handled by iCarcas (cmd /c + pause).

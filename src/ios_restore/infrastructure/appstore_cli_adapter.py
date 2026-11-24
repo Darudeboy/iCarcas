@@ -32,6 +32,13 @@ from ios_restore.infrastructure.process_runner import ProcessRunner
 
 logger = logging.getLogger("ios_restore.appstore")
 
+# After interactive work: wait for a key, then exit so the console window closes.
+# (cmd /k left users at a prompt — pressing a key only printed the path again.)
+_WIN_CONSOLE_CLOSE = (
+    " & echo. & echo ===== DONE exit=%ERRORLEVEL% ===== "
+    "& echo. & echo Press any key to close this window... & pause >nul"
+)
+
 
 class AppStoreCliAdapter:
     def __init__(
@@ -60,10 +67,10 @@ class AppStoreCliAdapter:
         if sys.platform == "win32":
             # Passphrase is typed interactively in that console — never from our GUI argv.
             inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
-            cmdline = f"{inner} & echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause"
+            cmdline = f"{inner}{_WIN_CONSOLE_CLOSE}"
             try:
                 subprocess.Popen(  # noqa: S603
-                    ["cmd.exe", "/k", cmdline],
+                    ["cmd.exe", "/c", cmdline],
                     cwd=str(self._tools_dir),
                     creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
                 )
@@ -178,13 +185,10 @@ class AppStoreCliAdapter:
         logger.info("Opening interactive ipatool console: %s", " ".join(ipatool_args))
         if sys.platform == "win32":
             inner = subprocess.list2cmdline([str(ipatool), *ipatool_args])
-            cmdline = (
-                f"echo {banner} & echo. & {inner} "
-                f"& echo. & echo ===== DONE exit=%ERRORLEVEL% ===== & pause"
-            )
+            cmdline = f"echo {banner} & echo. & {inner}{_WIN_CONSOLE_CLOSE}"
             try:
                 subprocess.Popen(  # noqa: S603
-                    ["cmd.exe", "/k", cmdline],
+                    ["cmd.exe", "/c", cmdline],
                     cwd=str(self._tools_dir),
                     creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
                 )
@@ -492,19 +496,27 @@ class AppStoreCliAdapter:
             pass
 
         if sys.platform == "win32":
-            script = self._resolve_tools_script(script_name)
-            args = [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script),
-                *(extra_args or []),
-            ]
+            script = self._resolve_win_script(script_name)
+            if script.suffix.lower() == ".py":
+                args = [sys.executable, str(script), *(extra_args or [])]
+            else:
+                args = [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                    *(extra_args or []),
+                ]
             try:
+                # /c + pause >nul: after any key the window closes (not cmd /k prompt).
                 self._active_proc = subprocess.Popen(  # noqa: S603
-                    ["cmd.exe", "/k", subprocess.list2cmdline(args) + " & echo. & pause"],
+                    [
+                        "cmd.exe",
+                        "/c",
+                        subprocess.list2cmdline(args) + _WIN_CONSOLE_CLOSE,
+                    ],
                     cwd=str(cwd or script.parent),
                     env=env,
                     creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
@@ -545,6 +557,20 @@ class AppStoreCliAdapter:
                 details=str(script),
             )
         return script
+
+    def _resolve_win_script(self, name: str) -> Path:
+        """Prefer Python port of a .ps1 when present (UTF-8 dumps).
+
+        Portable .exe (frozen) keeps .ps1 — relaunching sys.executable would
+        open another iCarcas window instead of running the dump script.
+        """
+        if name.endswith(".ps1") and not getattr(sys, "frozen", False):
+            py_name = name[: -len(".ps1")].replace("-", "_") + ".py"
+            try:
+                return self._resolve_tools_script(py_name)
+            except RestoreError:
+                pass
+        return self._resolve_tools_script(name)
 
     def begin_interactive_list_versions(
         self,

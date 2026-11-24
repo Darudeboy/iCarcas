@@ -109,5 +109,5 @@ $result | ConvertTo-Json -Depth 6 | Set-Content -Path $outFile -Encoding UTF8
 
 Write-Host ""
 Write-Host "Saved $($versions.Count) versions to $outFile"
-Write-Host "DONE. Close this window, then click «Подхватить версии» in iCarcas."
-pause
+Write-Host "DONE. Then click Podhvatit versii in iCarcas."
+# Window close is handled by iCarcas (cmd /c + pause).

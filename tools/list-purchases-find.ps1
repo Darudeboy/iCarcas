@@ -77,5 +77,5 @@ if (-not $hits -or $hits.Count -eq 0) {
 }
 
 Write-Host ""
-Write-Host 'DONE. You can close this window.'
-pause
+Write-Host 'DONE.'
+# Window close is handled by iCarcas (cmd /c + pause).

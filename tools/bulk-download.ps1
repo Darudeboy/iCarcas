@@ -110,5 +110,5 @@ Get-ChildItem -Path $outDir -Filter '*.ipa.tmp' -ErrorAction SilentlyContinue | 
 }
 
 Write-Host "DONE. ok=$ok fail=$fail"
-Write-Host 'Close this window, then click «Подхватить IPA» in iCarcas if needed.'
-pause
+Write-Host 'Then click Podhvatit IPA in iCarcas if needed.'
+# Window close is handled by iCarcas (cmd /c + pause).
