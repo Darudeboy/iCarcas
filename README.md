@@ -2,10 +2,11 @@
 
 Скачать **свои** приложения из App Store и поставить на **iPhone / iPad**.  
 Локально: пароли и ключ сессии никуда не уходят.  
-Клиентам без Python: [Releases iCarcas-exe](https://github.com/Darudeboy/iCarcas-exe/releases) (Windows ZIP).
+Клиентам без Python:
+- **Windows:** [iCarcas-exe Releases](https://github.com/Darudeboy/iCarcas-exe/releases) (ZIP)
+- **Mac:** `.app` / `.dmg` — [iCarcas Releases](https://github.com/Darudeboy/iCarcas/releases) или `./scripts/build-macos-app.sh` на Mac / Actions **Build macOS**
 
-**Первое подключение (что сказать клиенту):** [docs/client-first-run.md](docs/client-first-run.md)  
-**macOS:** [docs/macos.md](docs/macos.md)
+**Первое подключение:** [docs/client-first-run.md](docs/client-first-run.md) · **macOS:** [docs/macos.md](docs/macos.md)
 
 ## Быстрый старт — Windows
 

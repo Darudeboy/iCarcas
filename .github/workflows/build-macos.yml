@@ -1,0 +1,48 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build .app and .dmg
+        run: |
+          chmod +x scripts/build-macos-app.sh scripts/fetch-tools-macos.sh scripts/run-icarcas.sh
+          ./scripts/build-macos-app.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iCarcas-macos
+          path: |
+            dist/iCarcas.app
+            dist/iCarcas-macos.dmg
+            dist/iCarcas-macos-*.dmg
+
+      - name: Attach DMG to GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Create release if missing, then upload assets
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" dist/iCarcas-macos.dmg dist/iCarcas-macos-*.dmg --clobber

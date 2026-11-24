@@ -5,6 +5,7 @@ def test_what_you_need_mentions_cable_and_apple_id() -> None:
     text = first_run.what_you_need()
     assert "кабель" in text.casefold() or "USB" in text
     assert "Apple ID" in text
+    assert "Windows или Mac" in text
 
 
 def test_first_connection_has_ordered_steps() -> None:

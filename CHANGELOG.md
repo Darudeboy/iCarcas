@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.7 — 2026-11-24
+
+### macOS дистрибутив
+
+- Скрипт `scripts/build-macos-app.sh` → `iCarcas.app` + `.dmg` (только на Mac / CI).
+- GitHub Actions **Build macOS** (workflow_dispatch и теги `v*`).
+- Онбординг уточняет: Windows ZIP ≠ Mac; на Mac — `.app`/`.dmg`.
+
 ## 0.2.6 — 2026-11-24
 
 ### Первый запуск для клиента

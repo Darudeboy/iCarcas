@@ -18,7 +18,8 @@ def what_you_need() -> str:
     lines = [
         "Что понадобится от вас",
         "",
-        "1. Компьютер с " + platform_label() + ".",
+        "1. Компьютер — Windows или Mac.",
+        f"   Сейчас запущена сборка для: {platform_label()}.",
         "2. iPhone или iPad и обычный кабель USB "
         "(тот, которым заряжаете устройство).",
         "3. Ваш Apple ID (почта) и пароль — только свой аккаунт.",
@@ -32,18 +33,23 @@ def what_you_need() -> str:
         lines.extend(
             [
                 "",
+                "Эта сборка — Windows (ZIP iCarcas-exe из Releases).",
                 "На Windows один раз нужны драйверы Apple "
                 "(кнопка «Впервые здесь?» поставит их сама, если можно).",
+                "",
+                "На Mac ставят .app / .dmg из Releases iCarcas "
+                "(не этот ZIP) — см. docs/macos.md.",
             ]
         )
     elif sys.platform == "darwin":
         lines.extend(
             [
                 "",
-                "На Mac драйверы Apple не ставятся отдельно. "
-                "Если телефон не находится — в «Впервые здесь?» "
-                "докачаются утилиты; при необходимости программа подскажет "
-                "установить libimobiledevice через Homebrew.",
+                "Вы на Mac: .app / .dmg (не Windows ZIP).",
+                "Отдельные драйверы Apple не ставятся.",
+                "Если телефон не находится — «Впервые здесь?» докачает ipatool; "
+                "утилиты для телефона: brew install libimobiledevice ideviceinstaller "
+                "(программа покажет команду).",
             ]
         )
     return "\n".join(lines)

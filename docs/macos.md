@@ -49,11 +49,31 @@ ipatool:
 - Фоновая загрузка через `tools/download_one.py`
 - Дампы покупок/версий через Python-скрипты
 
+## Дистрибутив `.app` / `.dmg`
+
+Сборка **только на Mac** (или GitHub Actions `macos-14`):
+
+```bash
+./scripts/build-macos-app.sh
+# → dist/iCarcas.app
+# → dist/iCarcas-macos.dmg
+```
+
+CI: Actions → **Build macOS** (workflow_dispatch) или тег `v*`.
+
+На Windows эту сборку сделать нельзя — нужен Mac/CI.
+
+После установки DMG:
+1. Перетащить `iCarcas.app` в Applications (или открыть из образа).
+2. Если Gatekeeper: ПКМ → Open → Open.
+3. Один раз: `brew install libimobiledevice ideviceinstaller`
+
+Windows ZIP по-прежнему в [iCarcas-exe Releases](https://github.com/Darudeboy/iCarcas-exe/releases).
+
 ## Ограничения сейчас
 
-- Готовый `.app` / DMG в Releases ещё не публикуется (Windows ZIP есть в iCarcas-exe).
-- `idevice*` ожидаются из Homebrew (PATH) или из `tools/libimobiledevice/`.
-- Ярлык на рабочий стол — пока в основном Windows; на Mac удобнее Dock / скрипт запуска.
+- `idevice*` на машине пользователя — из Homebrew (PATH).
+- Подпись Apple Developer / notarization пока не настроена (возможен диалог Gatekeeper).
 
 ## Проверка
 
