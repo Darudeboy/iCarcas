@@ -101,57 +101,76 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# Portable layout next to the binary (paths.project_root() РІвЂ вЂ™ MacOS/)
-mkdir -p "${MACOS_DIR}/tools/libimobiledevice" "${MACOS_DIR}/packages" "${MACOS_DIR}/data"
+# Bundle extras under Contents/Resources, then symlink into MacOS/ so
+# project_root() (…/Contents/MacOS) still finds tools/data/assets.
+# Sign only AFTER the tree is complete — avoids Gatekeeper
+# "a sealed resource is missing or invalid".
+RES_DIR="${APP}/Contents/Resources"
+mkdir -p "${RES_DIR}/tools/libimobiledevice" "${RES_DIR}/packages" "${RES_DIR}/data"
 if [[ -f "${ROOT}/data/apps_catalog.txt" ]]; then
-  cp "${ROOT}/data/apps_catalog.txt" "${MACOS_DIR}/data/"
+  cp "${ROOT}/data/apps_catalog.txt" "${RES_DIR}/data/"
 fi
 if [[ -f "${ROOT}/CHANGELOG.md" ]]; then
-  cp "${ROOT}/CHANGELOG.md" "${MACOS_DIR}/"
+  cp "${ROOT}/CHANGELOG.md" "${RES_DIR}/"
 fi
 if [[ -f "${ROOT}/docs/client-first-run.md" ]]; then
-  cp "${ROOT}/docs/client-first-run.md" "${MACOS_DIR}/"
+  cp "${ROOT}/docs/client-first-run.md" "${RES_DIR}/"
 fi
 if [[ -d "${ROOT}/assets" ]]; then
-  cp -R "${ROOT}/assets" "${MACOS_DIR}/"
+  cp -R "${ROOT}/assets" "${RES_DIR}/"
 fi
 
 for name in download_one.py list_versions_dump.py list_purchases_dump.py; do
   if [[ -f "${ROOT}/tools/${name}" ]]; then
-    cp "${ROOT}/tools/${name}" "${MACOS_DIR}/tools/"
+    cp "${ROOT}/tools/${name}" "${RES_DIR}/tools/"
   fi
 done
 
 if [[ "$SKIP_TOOLS" -eq 0 ]]; then
   echo "Fetching ipatool into app bundle ..."
-  ARCH="$(uname -m)"
-  if [[ "$ARCH" == "arm64" ]]; then
-    URL="https://github.com/majd/ipatool/releases/download/v2.8.1/ipatool-2.8.1-macos-arm64.tar.gz"
+  arch="$(uname -m)"
+  if [[ "$arch" == "x86_64" ]]; then arch="amd64"; fi
+  name="ipatool-2.8.1-macos-${arch}"
+  url="https://github.com/majd/ipatool/releases/download/v2.8.1/${name}.tar.gz"
+  archive="${BUILD}/ipatool.tar.gz"
+  curl -fsSL "$url" -o "$archive"
+  if curl -fsSL "$url.sha256sum" -o "${archive}.sha256sum"; then
+    expected="$(awk '{print $1}' "${archive}.sha256sum")"
+    printf '%s  %s\n' "$expected" "$archive" | shasum -a 256 -c -
   else
-    URL="https://github.com/majd/ipatool/releases/download/v2.8.1/ipatool-2.8.1-macos-amd64.tar.gz"
+    echo "WARN: could not fetch ipatool sha256sum — continuing without verify"
   fi
-  TMP="$(mktemp -d)"
-  curl -fsSL "$URL" -o "${TMP}/ipatool.tar.gz"
-  tar -xzf "${TMP}/ipatool.tar.gz" -C "$TMP"
-  BIN="$(find "$TMP" -type f -name 'ipatool' | head -n 1)"
-  if [[ -n "$BIN" ]]; then
-    cp "$BIN" "${MACOS_DIR}/tools/libimobiledevice/ipatool"
-    chmod 755 "${MACOS_DIR}/tools/libimobiledevice/ipatool"
-    echo "OK ipatool"
+  bin="${RES_DIR}/tools/libimobiledevice/ipatool"
+  if tar -tzf "$archive" | grep -q "bin/${name}$"; then
+    tar -xzOf "$archive" "bin/${name}" > "$bin"
   else
-    echo "WARN: ipatool not found in archive"
+    # Fallback: first file named ipatool in the archive
+    TMP="$(mktemp -d)"
+    tar -xzf "$archive" -C "$TMP"
+    src="$(find "$TMP" -type f -name 'ipatool' | head -n 1)"
+    if [[ -z "$src" ]]; then
+      echo "ERROR: ipatool not found in archive"
+      rm -rf "$TMP"
+      exit 1
+    fi
+    cp "$src" "$bin"
+    rm -rf "$TMP"
   fi
-  rm -rf "$TMP"
+  chmod 755 "$bin"
+  codesign --force --sign - "$bin" || echo "WARN: codesign ipatool failed"
+  echo "OK ipatool"
 fi
 
-# Ad-hoc code sign вЂ” reduces вЂњapp is damagedвЂќ Gatekeeper false positives
-# for unsigned downloads (full Developer ID + notarization still preferred).
-if command -v codesign >/dev/null; then
-  echo "Ad-hoc codesignвЂ¦"
-  codesign --force --deep --sign - "${APP}" || echo "WARN: codesign failed"
-  # Clear quarantine bit if present on the build machine
-  xattr -cr "${APP}" 2>/dev/null || true
-fi
+for name in assets data tools packages CHANGELOG.md client-first-run.md; do
+  if [[ -e "${RES_DIR}/${name}" ]]; then
+    ln -sfn "../Resources/${name}" "${MACOS_DIR}/${name}"
+  fi
+done
+
+echo "Ad-hoc codesign…"
+codesign --force --sign - "${APP}"
+codesign --verify --deep --strict "${APP}"
+xattr -cr "${APP}" 2>/dev/null || true
 
 # README for end user inside the DMG folder staging
 STAGE="${BUILD}/dmg-stage"

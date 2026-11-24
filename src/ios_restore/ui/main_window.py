@@ -60,7 +60,7 @@ from ios_restore.infrastructure.device_cli_adapter import DeviceCliAdapter
 from ios_restore.infrastructure.environment_cli_adapter import EnvironmentCliAdapter
 from ios_restore.infrastructure.history_store import HistoryStore
 from ios_restore.infrastructure.install_cli_adapter import InstallCliAdapter
-from ios_restore.infrastructure.paths import default_tools_dir
+from ios_restore.infrastructure.paths import default_packages_dir, default_tools_dir
 from ios_restore.ui import apple_ui as aui
 from ios_restore.ui.apple_ui import (
     AppleButton,
@@ -360,7 +360,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(860, 600)
 
         self._thread_pool = QThreadPool.globalInstance()
-        self._packages_dir = packages_dir or (Path.cwd() / "packages")
+        self._packages_dir = packages_dir or default_packages_dir()
+        self._packages_dir.mkdir(parents=True, exist_ok=True)
         self._busy = False
         self._devices: list[DeviceInfo] = []
         self._package: PackageInfo | None = None

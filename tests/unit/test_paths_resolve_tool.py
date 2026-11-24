@@ -3,6 +3,20 @@ from pathlib import Path
 from ios_restore.infrastructure import paths as paths_mod
 
 
+def test_default_packages_dir_frozen_macos(monkeypatch) -> None:
+    monkeypatch.setattr(paths_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(paths_mod.sys, "frozen", True, raising=False)
+    got = paths_mod.default_packages_dir()
+    assert got.parts[-4:] == ("Library", "Application Support", "iCarcas", "packages")
+
+
+def test_default_packages_dir_dev_uses_cwd(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(paths_mod.sys, "platform", "win32")
+    monkeypatch.setattr(paths_mod.sys, "frozen", False, raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert paths_mod.default_packages_dir() == tmp_path / "packages"
+
+
 def test_resolve_tool_prefers_local(tmp_path: Path, monkeypatch) -> None:
     tools = tmp_path / "libimobiledevice"
     tools.mkdir()

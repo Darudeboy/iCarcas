@@ -40,6 +40,11 @@ tools/*.tar.xz
 tools/*.zip
 tools/*.exe
 
+# Local scratch (colleague zips, review dumps)
+_macos_fixed_src/
+_review_patch/
+_icarcas_exe/
+
 # OS
 Thumbs.db
 Desktop.ini

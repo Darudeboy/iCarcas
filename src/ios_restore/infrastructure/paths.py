@@ -9,11 +9,18 @@ from pathlib import Path
 
 
 def project_root() -> Path:
-    # Portable .exe: folder with iCarcas.exe, tools/, data/, packages/
+    # Portable .exe / .app: folder with the launcher (…/Contents/MacOS on macOS).
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     # src/ios_restore/infrastructure/paths.py -> parents[3] == repo root
     return Path(__file__).resolve().parents[3]
+
+
+def default_packages_dir() -> Path:
+    """Where IPA / dumps land. Frozen .app must not write into the bundle."""
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        return Path.home() / "Library" / "Application Support" / "iCarcas" / "packages"
+    return Path.cwd() / "packages"
 
 
 def default_tools_dir() -> Path:

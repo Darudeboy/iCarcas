@@ -67,6 +67,7 @@ CI: Actions → **Build macOS** (workflow_dispatch) или тег `v*`.
 После установки DMG:
 1. Перетащить `iCarcas.app` в Applications (или открыть из образа).
 2. Один раз: `brew install libimobiledevice ideviceinstaller`
+3. Скачанные IPA лежат в `~/Library/Application Support/iCarcas/packages/` (не внутри `.app`).
 
 ### Gatekeeper: «приложение повреждено»
 

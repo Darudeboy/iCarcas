@@ -9,6 +9,31 @@ from pathlib import Path
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Frozen macOS .app: worker spawns use sys.executable (this launcher) with a
+    # bundled helper script as argv[0]. Re-enter that script instead of the GUI.
+    if sys.platform == "darwin" and getattr(sys, "frozen", False) and argv:
+        from ios_restore.infrastructure.paths import default_tools_dir
+
+        helpers = default_tools_dir().parent
+        script = Path(argv[0])
+        if script.name in {
+            "download_one.py",
+            "list_versions_dump.py",
+            "list_purchases_dump.py",
+        }:
+            try:
+                same = script.is_absolute() and script.resolve() == (
+                    helpers / script.name
+                ).resolve()
+            except OSError:
+                same = False
+            if same:
+                import runpy
+
+                sys.argv = argv
+                runpy.run_path(str(script), run_name="__main__")
+                return 0
+
     from ios_restore.infrastructure.logging_setup import setup_logging
 
     setup_logging()
@@ -71,7 +96,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from PySide6.QtCore import Qt
 
-    window = MainWindow(packages_dir=Path.cwd() / "packages", mode=mode)
+    from ios_restore.infrastructure.paths import default_packages_dir
+
+    window = MainWindow(packages_dir=default_packages_dir(), mode=mode)
     window.setWindowIcon(app_icon)
     # Keep the native main HWND off-screen until splash handoff.
     window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)

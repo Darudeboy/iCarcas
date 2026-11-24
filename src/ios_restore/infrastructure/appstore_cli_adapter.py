@@ -90,23 +90,16 @@ class AppStoreCliAdapter:
         cwd = str(self._tools_dir)
         quoted = " ".join(shlex.quote(part) for part in argv)
         banner_cmd = f"echo {shlex.quote(banner)}; echo; " if banner else ""
+        # ASCII-only prompt: Unicode ellipsis (…) broke AppleScript do script (-2741)
+        # when the command was embedded via json.dumps / osascript -e.
         shell_line = (
             f"cd {shlex.quote(cwd)} && {banner_cmd}{quoted}; "
-            f"echo; echo '===== DONE ====='; read -n 1 -s -r -p 'Press any key to close…'"
+            "echo; echo '===== DONE ====='; "
+            "read -n 1 -s -r -p 'Press any key to close...'"
         )
         try:
             if sys.platform == "darwin":
-                # AppleScript: open Terminal and run the command.
-                osa = (
-                    'tell application "Terminal"\n'
-                    "activate\n"
-                    f'do script {json.dumps(shell_line)}\n'
-                    "end tell\n"
-                )
-                subprocess.Popen(  # noqa: S603
-                    ["osascript", "-e", osa],
-                    cwd=cwd,
-                )
+                self._open_macos_terminal(shell_line)
                 return
             for term in (
                 ["x-terminal-emulator", "-e", "bash", "-lc", shell_line],
@@ -119,6 +112,8 @@ class AppStoreCliAdapter:
                     return
                 except OSError:
                     continue
+        except RestoreError:
+            raise
         except OSError as exc:
             raise RestoreError(
                 ErrorCode.UNKNOWN_EXTERNAL_ERROR,
@@ -129,6 +124,52 @@ class AppStoreCliAdapter:
             ErrorCode.UNKNOWN_EXTERNAL_ERROR,
             "Не найден терминал (Terminal.app / gnome-terminal / xterm).",
         )
+
+    @staticmethod
+    def _open_macos_terminal(shell_line: str) -> None:
+        """Open Terminal.app via a temp .command file (no AppleScript string escaping).
+
+        The previous path used ``osascript -e`` + ``json.dumps(shell_line)``. Unicode
+        in the prompt (e.g. U+2026 …) became ``\\u2026`` / odd quoting and Terminal
+        never opened (AppleScript -2741), while the UI still said the console opened.
+        """
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp(prefix="icarcas-", suffix=".command")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("#!/bin/bash\n")
+                fh.write('trap \'rm -f -- "$0"\' EXIT\n')
+                fh.write(shell_line)
+                fh.write("\n")
+            os.chmod(path, 0o700)
+            proc = subprocess.run(  # noqa: S603
+                ["/usr/bin/open", "-a", "Terminal", path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout or "").strip()
+                raise RestoreError(
+                    ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                    "Не удалось открыть Terminal.app для ipatool.",
+                    details=err[:500] or f"open exit {proc.returncode}",
+                )
+        except RestoreError:
+            raise
+        except OSError as exc:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise RestoreError(
+                ErrorCode.UNKNOWN_EXTERNAL_ERROR,
+                "Не удалось открыть Terminal.app для ipatool.",
+                details=str(exc),
+            ) from exc
 
     def begin_interactive_login(self) -> None:
         self._open_console(["auth", "login"])

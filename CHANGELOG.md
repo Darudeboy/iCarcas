@@ -5,6 +5,9 @@
 ### Дистрибутивы
 
 - macOS: ad-hoc `codesign` в `build-macos-app.sh`; в README/docs — снятие quarantine (`xattr -cr`) при «приложение повреждено».
+- macOS `.app`: extras в `Contents/Resources` + symlink в `MacOS`, подпись после полной сборки (без «sealed resource»).
+- macOS: «Войти» открывает Terminal через `.command` (без AppleScript -2741); IPA — в `~/Library/Application Support/iCarcas/packages/`.
+- macOS frozen: helper-скрипты (`download_one.py` и др.) через `sys.executable` → `runpy`.
 - Сплэш: плавная кассета кадров без зависания IDE; надёжный handoff главного окна.
 
 ## 0.3.0 — 2026-11-24
