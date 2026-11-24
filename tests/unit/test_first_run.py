@@ -12,7 +12,7 @@ def test_first_connection_has_ordered_steps() -> None:
     text = first_run.first_connection_steps()
     assert "Шаг A" in text
     assert "Шаг B" in text
-    assert "Телефон" in text
+    assert "Устройство" in text
     assert "Apple ID" in text
 
 

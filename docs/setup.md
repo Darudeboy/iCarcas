@@ -19,6 +19,6 @@
 | Нет `pyproject.toml` / `ios_restore` | Открыть папку iCarcas, заново `pip install -e ".[dev]"` |
 | Устройство в Windows есть, в iCarcas нет | Шаги 4–5 выше (CLI + драйверы Apple) |
 | На Mac телефон не находится | `brew install libimobiledevice ideviceinstaller` + `./scripts/fetch-tools-macos.sh` |
-| «Нужно доверие» / Password protected | Разблокировать экран, «Доверять», снова **Телефон… → Найти телефон** |
+| «Нужно доверие» / Password protected | Разблокировать экран, «Доверять», снова **Устройство… → Найти устройство** |
 | Нет ярлыка на рабочем столе | В программе кнопка **Ярлык**, или `scripts\create-desktop-shortcut.ps1` рядом с `iCarcas.exe` |
 | `license is required` | Приложения нет на этом Apple ID — поиск ID сам по себе не даёт скачать |

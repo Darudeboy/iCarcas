@@ -387,7 +387,7 @@ class MainWindow(QMainWindow):
         self.title_label.setObjectName("appTitle")
         self.title_label.setTextFormat(Qt.TextFormat.RichText)
         self._refresh_title()
-        sub = QLabel("Свои приложения с App Store → на iPhone / iPad")
+        sub = QLabel("Свои приложения из App Store на iPhone и iPad")
         sub.setObjectName("appSubtitle")
         sub.setWordWrap(True)
         titles.addWidget(self.title_label)
@@ -397,10 +397,10 @@ class MainWindow(QMainWindow):
 
         corner_row = QHBoxLayout()
         corner_row.setSpacing(10)
-        self.device_button = make_corner_button("Телефон…")
+        self.device_button = make_corner_button("Устройство…")
         self.device_button.setToolTip(
-            "Телефон: подключите кабель USB → «Найти телефон». "
-            "Зелёный цвет — телефон найден."
+            "iPhone или iPad: кабель USB, затем «Найти устройство». "
+            "Зелёный цвет — устройство найдено."
         )
         self._rebuild_device_menu()
         self.session_button = make_corner_button("Apple ID…")
@@ -727,8 +727,8 @@ class MainWindow(QMainWindow):
 
     def _rebuild_device_menu(self) -> None:
         menu = self._theme_menu()
-        menu.addAction("Найти телефон", self._on_detect)
-        menu.addAction("Разрешить доверие на телефоне", self._on_pair)
+        menu.addAction("Найти устройство", self._on_detect)
+        menu.addAction("Разрешить доверие на устройстве", self._on_pair)
         self.device_button.setMenu(menu)
 
     def _rebuild_session_menu(self) -> None:
@@ -763,9 +763,9 @@ class MainWindow(QMainWindow):
         if found and name:
             label = name if len(name) <= 22 else name[:20] + "…"
         elif found:
-            label = "Телефон ✓"
+            label = "Устройство ✓"
         else:
-            label = "Телефон…"
+            label = "Устройство…"
         self._paint_device_corner(state="ok" if found else "idle", text=label)
         self.chip_device.set_state(found, label)
         if found:
@@ -1330,7 +1330,7 @@ class MainWindow(QMainWindow):
         self.set_device_working("Ищем…")
         self._set_busy(
             True,
-            "Ищем телефон…\nПодключите кабель USB, разблокируйте экран и нажмите «Доверять».",
+            "Ищем устройство…\nПодключите кабель USB, разблокируйте экран и нажмите «Доверять».",
         )
         worker = DetectDevicesWorker(self._device_adapter)
         worker.signals.finished.connect(self._on_devices_found)
@@ -1343,18 +1343,18 @@ class MainWindow(QMainWindow):
         if not self._devices:
             QMessageBox.information(
                 self,
-                "Нет телефона",
-                "Сначала нажмите «Телефон…» → «Найти телефон».",
+                "Нет устройства",
+                "Сначала нажмите «Устройство…» → «Найти устройство».",
             )
             return
         device = self._devices[0]
         QMessageBox.information(
             self,
             "Доверие",
-            "Разблокируйте телефон. Если появится запрос — нажмите «Доверять».",
+            "Разблокируйте устройство. Если появится запрос — нажмите «Доверять».",
         )
         self.set_device_working("Связь…")
-        self._set_busy(True, "Устанавливаем связь с телефоном…")
+        self._set_busy(True, "Устанавливаем связь с устройством…")
         worker = PairDeviceWorker(self._device_adapter, device.device_id)
         worker.signals.finished.connect(self._on_paired)
         worker.signals.failed.connect(self._on_device_worker_failed)
