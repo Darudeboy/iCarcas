@@ -20,68 +20,40 @@ from PySide6.QtWidgets import (
 )
 
 from ios_restore.infrastructure import desktop_shortcut as desk
+from ios_restore.ui import first_run
 from ios_restore.ui.tos import TOS_TEXT, accept_tos, tos_accepted
 
 # Bump when first-run copy changes so existing installs see the simpler guide once.
-ONBOARDING_VERSION = "2"
+ONBOARDING_VERSION = "3"
 ONBOARDING_KEY = "onboarding/completed_version"
 
-HELP_HTML = """
-<p><b>iCarcas</b> ставит на ваш iPhone или iPad приложения, которые уже были
-на <b>вашем</b> Apple ID. Пароли никуда не отправляются.</p>
 
-<h3>Как пользоваться</h3>
-<ol>
-<li>Возьмите <b>кабель USB</b>, подключите телефон к компьютеру и
-<b>разблокируйте</b> экран. На телефоне нажмите <b>«Доверять»</b>.</li>
-<li>Справа вверху нажмите <b>«Телефон…»</b> → «Найти телефон».</li>
-<li>Нажмите <b>«Apple ID…»</b> → «Войти». Откроется чёрное окно —
-введите логин, пароль и код из SMS. Это нормально.</li>
-<li>Найдите приложение → <b>«Скачать»</b> → <b>«Установить на устройство»</b>.</li>
-</ol>
-
-<p>Если телефон не находится — кнопка <b>«Впервые здесь?»</b>: проверка
-и установка нужных компонентов одной кнопкой.</p>
-
-<p>Скачивается только то, что уже покупали или ставили на этом Apple ID.
-Просто найти название в поиске — ещё не значит, что можно скачать.</p>
-"""
-
-_PAGES: tuple[tuple[str, str], ...] = (
-    (
-        "Добро пожаловать",
-        "iCarcas помогает вернуть на iPhone или iPad ваши приложения из App Store.\n\n"
-        "Нужны только кабель USB и ваш Apple ID.\n"
-        "Пароль остаётся на этом компьютере — в интернет «на сторону» он не уходит.",
-    ),
-    (
-        "Подключите телефон",
-        "1. Возьмите обычный кабель USB (тот, которым заряжаете телефон).\n"
-        "2. Вставьте в компьютер и в iPhone / iPad.\n"
-        "3. Разблокируйте телефон.\n"
-        "4. На экране телефона нажмите «Доверять этому компьютеру».\n\n"
-        "Потом в программе справа вверху: кнопка «Телефон…» → «Найти телефон».\n"
-        "Когда телефон найден, кнопка станет зелёной.",
-    ),
-    (
-        "Войдите в Apple ID",
-        "Справа вверху нажмите «Apple ID…» → «Войти».\n\n"
-        "Откроется отдельное чёрное окно — так и должно быть.\n"
-        "Введите:\n"
-        "• свой Apple ID (почту),\n"
-        "• пароль,\n"
-        "• код из SMS или с другого устройства Apple.\n\n"
-        "После успешного входа кнопка станет зелёной.\n"
-        "Дальше: найдите приложение → скачайте → установите на телефон.",
-    ),
-    (
-        "Важно знать",
-        "Ставятся только приложения, которые уже были на вашем Apple ID "
-        "(покупки или прошлые установки).\n\n"
-        "Если Apple пишет, что нужна лицензия — этого приложения на аккаунте нет.\n"
-        "Это ограничение магазина, а не поломка программы.",
-    ),
-)
+def _pages() -> tuple[tuple[str, str], ...]:
+    return (
+        (
+            "Добро пожаловать",
+            "iCarcas помогает вернуть на iPhone или iPad ваши приложения из App Store.\n"
+            f"Сейчас вы на {first_run.platform_label()}.\n\n"
+            "Дальше коротко: что от вас нужно и как подключиться в первый раз.",
+        ),
+        (
+            "Что понадобится от вас",
+            first_run.what_you_need(),
+        ),
+        (
+            "Первое подключение",
+            first_run.first_connection_steps(),
+        ),
+        (
+            "Важно знать",
+            "Ставятся только приложения, которые уже были на вашем Apple ID "
+            "(покупки или прошлые установки).\n\n"
+            "Если Apple пишет, что нужна лицензия — этого приложения на аккаунте нет.\n"
+            "Это ограничение магазина, а не поломка программы.\n\n"
+            "Отдельное чёрное окно при входе — нормально: туда вводятся "
+            "пароль и код подтверждения.",
+        ),
+    )
 
 
 def onboarding_done(settings: QSettings | None = None) -> bool:
@@ -124,9 +96,9 @@ def show_help_dialog(parent: QWidget | None = None) -> None:
     _show_html_dialog(
         parent,
         title="Справка — как пользоваться",
-        html=HELP_HTML,
-        width=560,
-        height=520,
+        html=first_run.help_html(),
+        width=580,
+        height=560,
     )
 
 
@@ -142,12 +114,12 @@ class OnboardingDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Знакомство с iCarcas")
-        self.setMinimumSize(540, 460)
+        self.setMinimumSize(560, 500)
         self._settings = QSettings("iCarcas", "iCarcas")
 
         root = QVBoxLayout(self)
         self.stack = QStackedWidget(self)
-        for title, body in _PAGES:
+        for title, body in _pages():
             self.stack.addWidget(self._page(title, body))
         self.stack.addWidget(self._tos_page())
         root.addWidget(self.stack, 1)

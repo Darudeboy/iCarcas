@@ -1,9 +1,13 @@
 # iCarcas
 
 Скачать **свои** приложения из App Store и поставить на **iPhone / iPad**.  
-Всё локально: пароли и ключ сессии никуда не уходят.
+Локально: пароли и ключ сессии никуда не уходят.  
+Клиентам без Python: [Releases iCarcas-exe](https://github.com/Darudeboy/iCarcas-exe/releases) (Windows ZIP).
 
-## Быстрый старт (Windows)
+**Первое подключение (что сказать клиенту):** [docs/client-first-run.md](docs/client-first-run.md)  
+**macOS:** [docs/macos.md](docs/macos.md)
+
+## Быстрый старт — Windows
 
 Работайте из папки репозитория (там, где `pyproject.toml`).
 
@@ -18,21 +22,16 @@ pip install -U pip
 pip install -e ".[dev]"
 ```
 
-Или одной командой: `.\scripts\run-icarcas.ps1`
+Или: `.\scripts\run-icarcas.ps1`
 
-### 2. Инструменты для телефона (обязательно)
+### 2. Инструменты для телефона
 
-После `git clone` их **ещё нет** — без них iCarcas не увидит устройство.
+1. [libimobiledevice (Windows)](https://github.com/L1ghtmann/libimobiledevice/releases/tag/suite-exe-21d57a9) → `tools\libimobiledevice\`
+2. [ipatool](https://github.com/majd/ipatool/releases) → `tools\libimobiledevice\ipatool.exe`
+3. Драйверы: `winget install --id Apple.AppleMobileDeviceSupport -e`
+4. Проверка: `.\scripts\check-tools.ps1`
 
-1. Скачайте [libimobiledevice (Windows)](https://github.com/L1ghtmann/libimobiledevice/releases/tag/suite-exe-21d57a9) и распакуйте файлы в `tools\libimobiledevice\`
-2. Скачайте [ipatool](https://github.com/majd/ipatool/releases) (Windows) → сохраните как `tools\libimobiledevice\ipatool.exe`
-3. Установите драйверы Apple:
-
-```powershell
-winget install --id Apple.AppleMobileDeviceSupport -e
-```
-
-4. Проверьте: `.\scripts\check-tools.ps1` — должно быть OK по всем пунктам.
+В приложении то же делает **«Впервые здесь?»**.
 
 ### 3. Запуск
 
@@ -40,26 +39,36 @@ winget install --id Apple.AppleMobileDeviceSupport -e
 .\scripts\run-icarcas.ps1
 ```
 
-Подключите кабель → разблокируйте iPhone/iPad → нажмите **«Доверять»** → в углу **iOS… → Найти устройство**.
+## Быстрый старт — macOS
 
-### 4. Как пользоваться
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+brew install libimobiledevice ideviceinstaller
+./scripts/fetch-tools-macos.sh
+./scripts/run-icarcas.sh
+```
 
-1. **iOS…** — найти устройство  
-2. **Войти…** — свой Apple ID (пароль и код в консоли)  
-3. Найти ID → **Скачать IPA** → **Установить на устройство**
+Подробности: [docs/macos.md](docs/macos.md).
 
-Скачивается только то, что уже было на этом Apple ID (покупки / прошлые установки).
+## Как пользоваться (оба ОС)
 
-Подробнее при сбоях: [docs/setup.md](docs/setup.md). В приложении сверху: **Впервые здесь?** и **Справка**.
+1. **Впервые здесь?** — подготовка компьютера  
+2. Кабель → «Доверять» → **Телефон… → Найти телефон**  
+3. **Apple ID… → Войти** (пароль и код в отдельном окне)  
+4. Найти ID → **Скачать** → **Установить на устройство**
 
-## Важно знать
+Скачивается только то, что уже было на этом Apple ID.
+
+## Важно
 
 - Обход чужого региона, пиратские IPA и jailbreak — **не поддерживаются**.
-- Установка на устройство без джейлбрейка — «как получится»; запуск приложения iCarcas не гарантирует.
-- Ключ сессии (passphrase) — не пароль Apple ID; на Windows можно сохранить локально (DPAPI).
+- Ключ сессии (passphrase) — не пароль Apple ID; хранится только локально.
 
 ## Документация
 
-- [docs/setup.md](docs/setup.md) — если устройство не видно / ошибки установки  
-- [docs/capability_matrix.md](docs/capability_matrix.md) — что проверено  
-- [docs/architecture.md](docs/architecture.md) · [docs/dependency_licenses.md](docs/dependency_licenses.md)
+- [docs/client-first-run.md](docs/client-first-run.md) — путь для клиента  
+- [docs/macos.md](docs/macos.md) — Mac  
+- [docs/setup.md](docs/setup.md) — сбои на Windows  
+- [docs/architecture.md](docs/architecture.md) · [docs/capability_matrix.md](docs/capability_matrix.md)

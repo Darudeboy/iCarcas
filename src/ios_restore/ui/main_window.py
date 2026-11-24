@@ -423,7 +423,7 @@ class MainWindow(QMainWindow):
         self.open_setup_button.setProperty("emphasis", "1")
         repolish(self.open_setup_button)
         self.open_setup_button.setToolTip(
-            "Если телефон не находится — проверка и установка нужного одной кнопкой"
+            "Первая подготовка компьютера: проверка и установка нужного одной кнопкой"
         )
         self.open_setup_button.clicked.connect(lambda: show_dependencies_dialog(self))
         self.release_notes_button = make_button("Что нового", "header")
@@ -1302,23 +1302,22 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Загрузка", hint + extra)
 
     def _append_env_status(self) -> None:
+        from ios_restore.ui import first_run
+
         report = DependencyService().check()
         lines = [
             "Готово к работе." if report.all_ok else "Нужна подготовка компьютера.",
             "",
-            "1) Кабель USB → разблокировать телефон → «Доверять».",
-            "2) Справа вверху «Телефон…» → «Найти телефон».",
-            "3) «Apple ID…» → «Войти» (логин, пароль и код в чёрном окне).",
-            "4) Найти приложение → скачать → установить.",
+            first_run.first_connection_steps(),
             "",
         ]
         if not report.all_ok:
-            lines.append("Не хватает компонентов — нажмите «Впервые здесь?» → «Установить недостающее».")
+            lines.append("Не хватает компонентов — «Впервые здесь?» → «Установить недостающее».")
             for comp in report.components:
                 if not comp.ok:
                     lines.append(f"  • {comp.title}")
         else:
-            lines.append("Компоненты на месте. IPA сохраняются в папку packages.")
+            lines.append("Компоненты на месте. Файлы IPA — в папке packages.")
         self.output.setPlainText("\n".join(lines))
         try:
             EnvironmentCliAdapter().check_tools()

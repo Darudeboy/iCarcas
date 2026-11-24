@@ -44,17 +44,19 @@ class _RepairWorker(QRunnable):
 class DependenciesDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Впервые здесь — проверка ПК")
-        self.resize(620, 480)
+        self.setWindowTitle("Впервые здесь — подготовка компьютера")
+        self.resize(640, 520)
         self._service = DependencyService()
         self._pool = QThreadPool.globalInstance()
 
         root = QVBoxLayout(self)
         intro = QLabel(
-            "Чтобы программа увидела телефон и могла скачивать приложения, "
-            "на компьютере нужны несколько служебных файлов и драйверы Apple.\n\n"
-            "Нажмите «Установить недостающее» — всё подтянется само. "
-            "Потом подключите телефон кабелем USB."
+            "Перед первым подключением телефона проверьте этот список.\n\n"
+            "«Установить недостающее» скачает служебные файлы "
+            "(на Windows — ещё и драйверы Apple, если можно).\n"
+            "На Mac утилиты для телефона при необходимости ставятся через Homebrew — "
+            "программа подскажет команду.\n\n"
+            "Потом: кабель USB → «Доверять» на телефоне → «Телефон…» → «Найти телефон»."
         )
         intro.setWordWrap(True)
         intro.setObjectName("hint")

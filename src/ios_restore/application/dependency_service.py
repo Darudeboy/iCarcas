@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 import sys
@@ -17,11 +18,23 @@ SUITE_URL = (
     "https://github.com/L1ghtmann/libimobiledevice/releases/download/"
     "suite-exe-21d57a9/libimobile-suite-latest_x86_64-mingw64.tar.xz"
 )
-IPATOOL_URL = (
+IPATOOL_URL_WIN = (
     "https://github.com/majd/ipatool/releases/download/"
     "v2.8.1/ipatool-2.8.1-windows-amd64.tar.gz"
 )
+IPATOOL_URL_DARWIN_ARM = (
+    "https://github.com/majd/ipatool/releases/download/"
+    "v2.8.1/ipatool-2.8.1-macos-arm64.tar.gz"
+)
+IPATOOL_URL_DARWIN_AMD = (
+    "https://github.com/majd/ipatool/releases/download/"
+    "v2.8.1/ipatool-2.8.1-macos-amd64.tar.gz"
+)
 SCRIPTS_BASE = "https://raw.githubusercontent.com/Darudeboy/iCarcas/main/tools/"
+BREW_HINT = (
+    "brew tap libimobiledevice/homebrew-libimobiledevice && "
+    "brew install libimobiledevice ideviceinstaller"
+)
 
 DEVICE_TOOLS = (
     "idevice_id",
@@ -101,11 +114,20 @@ class DependencyService:
         report = self.check()
         missing_keys = {c.key for c in report.missing}
 
-        if any(k.startswith("device:") or k == "ipatool" for k in missing_keys):
+        if sys.platform == "win32" and any(
+            k.startswith("device:") or k == "ipatool" for k in missing_keys
+        ):
             note("Скачиваю libimobiledevice + ipatool…")
-            self._ensure_cli_tools()
+            self._ensure_cli_tools_windows()
+        elif sys.platform == "darwin" and "ipatool" in missing_keys:
+            note("Скачиваю ipatool для macOS…")
+            self._ensure_ipatool_macos()
 
-        script_names = [c.key.removeprefix("script:") for c in report.missing if c.key.startswith("script:")]
+        script_names = [
+            c.key.removeprefix("script:")
+            for c in report.missing
+            if c.key.startswith("script:")
+        ]
         if script_names:
             note("Ставлю скрипты tools/…")
             self._ensure_scripts(script_names)
@@ -118,6 +140,13 @@ class DependencyService:
             note("Устанавливаю Apple Mobile Device Support (winget)…")
             self._install_apple_mobile()
 
+        device_missing = [k for k in missing_keys if k.startswith("device:")]
+        if device_missing and sys.platform == "darwin":
+            note(
+                "Утилиты для телефона на Mac ставятся через Homebrew. "
+                f"В Терминале: {BREW_HINT}"
+            )
+
         note("Проверяю ещё раз…")
         return self.check()
 
@@ -127,6 +156,14 @@ class DependencyService:
         return REQUIRED_SCRIPTS_UNIX
 
     def _check_apple_mobile(self) -> ComponentStatus:
+        if sys.platform == "darwin":
+            return ComponentStatus(
+                key="apple_mobile",
+                title="Поддержка iPhone на Mac",
+                ok=True,
+                detail="Отдельные драйверы Apple не нужны — достаточно кабеля и «Доверять»",
+                repairable=False,
+            )
         if sys.platform != "win32":
             return ComponentStatus(
                 key="apple_mobile",
@@ -179,24 +216,37 @@ class DependencyService:
         )
 
     def _check_ipatool(self) -> ComponentStatus:
-        path = resolve_tool("ipatool", self._tools_dir)
-        ok = path.is_file()
+        path = self._resolve_cli("ipatool")
+        ok = path is not None and path.is_file()
         return ComponentStatus(
             key="ipatool",
             title="ipatool",
             ok=ok,
-            detail=str(path) if ok else f"Нет файла в {self._tools_dir}",
+            detail=str(path) if ok else f"Нет файла в {self._tools_dir} и не найден в PATH",
         )
 
     def _check_device_tool(self, name: str) -> ComponentStatus:
-        path = resolve_tool(name, self._tools_dir)
-        ok = path.is_file()
+        path = self._resolve_cli(name)
+        ok = path is not None and path.is_file()
+        detail = str(path) if ok else f"Нет в {self._tools_dir}"
+        if not ok and sys.platform == "darwin":
+            detail += f". Установите: {BREW_HINT}"
         return ComponentStatus(
             key=f"device:{name}",
             title=name,
             ok=ok,
-            detail=str(path) if ok else f"Нет файла в {self._tools_dir}",
+            detail=detail,
+            repairable=sys.platform == "win32" or name == "ipatool",
         )
+
+    def _resolve_cli(self, name: str) -> Path | None:
+        path = resolve_tool(name, self._tools_dir)
+        if path.is_file():
+            return path
+        which = shutil.which(name)
+        if which:
+            return Path(which)
+        return None
 
     def _check_script(self, name: str) -> ComponentStatus:
         path = self._scripts_dir / name
@@ -208,7 +258,7 @@ class DependencyService:
             detail=str(path) if ok else f"Нет tools/{name}",
         )
 
-    def _ensure_cli_tools(self) -> None:
+    def _ensure_cli_tools_windows(self) -> None:
         self._tools_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="icarcas-tools-") as tmp:
             tmp_path = Path(tmp)
@@ -220,19 +270,35 @@ class DependencyService:
                 check=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            ipa_tg = tmp_path / "ipatool.tar.gz"
-            self._download(IPATOOL_URL, ipa_tg)
-            extract = tmp_path / "ipatool"
-            extract.mkdir()
-            with tarfile.open(ipa_tg, "r:gz") as tf:
-                tf.extractall(extract)
-            exe = next(extract.rglob("ipatool*.exe"), None) or next(
-                extract.rglob("ipatool"), None
-            )
-            if exe is None:
-                raise RuntimeError("ipatool не найден в архиве")
-            target = self._tools_dir / ("ipatool.exe" if sys.platform == "win32" else "ipatool")
-            shutil.copy2(exe, target)
+            self._install_ipatool_archive(IPATOOL_URL_WIN, tmp_path, exe_name="ipatool.exe")
+
+    def _ensure_ipatool_macos(self) -> None:
+        self._tools_dir.mkdir(parents=True, exist_ok=True)
+        machine = (platform.machine() or "").lower()
+        url = IPATOOL_URL_DARWIN_ARM if "arm" in machine else IPATOOL_URL_DARWIN_AMD
+        with tempfile.TemporaryDirectory(prefix="icarcas-tools-") as tmp:
+            self._install_ipatool_archive(url, Path(tmp), exe_name="ipatool")
+            target = self._tools_dir / "ipatool"
+            if target.is_file():
+                try:
+                    target.chmod(0o755)
+                except OSError:
+                    pass
+
+    def _install_ipatool_archive(self, url: str, tmp_path: Path, *, exe_name: str) -> None:
+        ipa_tg = tmp_path / "ipatool.tar.gz"
+        self._download(url, ipa_tg)
+        extract = tmp_path / "ipatool"
+        extract.mkdir()
+        with tarfile.open(ipa_tg, "r:gz") as tf:
+            tf.extractall(extract)
+        exe = next(extract.rglob("ipatool*.exe"), None) or next(
+            extract.rglob("ipatool"), None
+        )
+        if exe is None:
+            raise RuntimeError("ipatool не найден в архиве")
+        target = self._tools_dir / exe_name
+        shutil.copy2(exe, target)
 
     def _ensure_scripts(self, names: list[str]) -> None:
         self._scripts_dir.mkdir(parents=True, exist_ok=True)
