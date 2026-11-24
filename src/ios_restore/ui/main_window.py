@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -368,7 +369,7 @@ class MainWindow(QMainWindow):
         self.title_label.setObjectName("appTitle")
         self.title_label.setTextFormat(Qt.TextFormat.RichText)
         self._refresh_title()
-        sub = QLabel("Восстановление своих приложений на iOS")
+        sub = QLabel("Свои приложения с App Store → на iPhone / iPad")
         sub.setObjectName("appSubtitle")
         sub.setWordWrap(True)
         titles.addWidget(self.title_label)
@@ -378,11 +379,16 @@ class MainWindow(QMainWindow):
 
         corner_row = QHBoxLayout()
         corner_row.setSpacing(10)
-        self.device_button = make_corner_button("iOS…")
-        self.device_button.setToolTip("Найти iPhone / iPad или возобновить подключение")
+        self.device_button = make_corner_button("Телефон…")
+        self.device_button.setToolTip(
+            "Телефон: подключите кабель USB → «Найти телефон». "
+            "Зелёный цвет — телефон найден."
+        )
         self._rebuild_device_menu()
-        self.session_button = make_corner_button("Войти…")
-        self.session_button.setToolTip("Сессия App Store: войти или возобновить")
+        self.session_button = make_corner_button("Apple ID…")
+        self.session_button.setToolTip(
+            "Вход в ваш Apple ID. Зелёный цвет — вы вошли."
+        )
         self._device_ok = False
         self._session_ok = False
         self._session_label: str | None = None
@@ -392,25 +398,28 @@ class MainWindow(QMainWindow):
         header.addLayout(corner_row)
         root.addLayout(header)
 
-        # Full-width nav — do not pack under iOS/session chips (that ate the right edge).
+        # Full-width nav — do not pack under phone/Apple ID chips.
         nav_row = QHBoxLayout()
         nav_row.setSpacing(8)
         self.open_setup_button = make_button("Впервые здесь?", "header")
         self.open_setup_button.setProperty("emphasis", "1")
         repolish(self.open_setup_button)
         self.open_setup_button.setToolTip(
-            "Проверка ПК и установка недостающих компонентов одной кнопкой"
+            "Если телефон не находится — проверка и установка нужного одной кнопкой"
         )
         self.open_setup_button.clicked.connect(lambda: show_dependencies_dialog(self))
         self.release_notes_button = make_button("Что нового", "header")
         self.release_notes_button.setToolTip("Изменения с последнего релиза")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
         self.help_button = make_button("Справка", "header")
-        self.help_button.setToolTip("Как пользоваться — кратко по шагам")
+        self.help_button.setToolTip("Как пользоваться — простые шаги")
         self.help_button.clicked.connect(lambda: show_help_dialog(self))
         self.replay_onboarding_button = make_button("Обучение", "header")
-        self.replay_onboarding_button.setToolTip("Повторить знакомство при старте")
+        self.replay_onboarding_button.setToolTip("Повторить знакомство")
         self.replay_onboarding_button.clicked.connect(self._on_replay_onboarding)
+        self.shortcut_button = make_button("Ярлык", "header")
+        self.shortcut_button.setToolTip("Создать ярлык iCarcas на рабочем столе")
+        self.shortcut_button.clicked.connect(self._on_create_desktop_shortcut)
         self.theme_button = make_button("", "header")
         self.theme_button.setToolTip("Переключить светлую / тёмную тему")
         self.theme_button.clicked.connect(self._toggle_theme)
@@ -423,6 +432,7 @@ class MainWindow(QMainWindow):
             self.release_notes_button,
             self.help_button,
             self.replay_onboarding_button,
+            self.shortcut_button,
             self.theme_button,
         ):
             btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -697,23 +707,23 @@ class MainWindow(QMainWindow):
 
     def _rebuild_device_menu(self) -> None:
         menu = self._theme_menu()
-        menu.addAction("Найти устройство", self._on_detect)
-        menu.addAction("Установить доверие", self._on_pair)
+        menu.addAction("Найти телефон", self._on_detect)
+        menu.addAction("Разрешить доверие на телефоне", self._on_pair)
         self.device_button.setMenu(menu)
 
     def _rebuild_session_menu(self) -> None:
         menu = self._theme_menu()
         if self._session_ok:
-            menu.addAction("Проверить сессию…", self._on_auth_info)
-            menu.addAction("Возобновить вход…", self._on_login)
+            menu.addAction("Проверить вход…", self._on_auth_info)
+            menu.addAction("Войти снова…", self._on_login)
             menu.addSeparator()
             menu.addAction("Запомнить ключ…", self._on_save_passphrase)
             menu.addAction("Забыть ключ", self._on_clear_passphrase)
             menu.addSeparator()
             menu.addAction("Выйти…", self._on_logout)
         else:
-            menu.addAction("Войти…", self._on_login)
-            menu.addAction("Проверить сессию…", self._on_auth_info)
+            menu.addAction("Войти в Apple ID…", self._on_login)
+            menu.addAction("Проверить вход…", self._on_auth_info)
             menu.addSeparator()
             menu.addAction("Запомнить ключ…", self._on_save_passphrase)
             menu.addAction("Забыть ключ", self._on_clear_passphrase)
@@ -733,9 +743,9 @@ class MainWindow(QMainWindow):
         if found and name:
             label = name if len(name) <= 22 else name[:20] + "…"
         elif found:
-            label = "iOS OK"
+            label = "Телефон ✓"
         else:
-            label = "iOS…"
+            label = "Телефон…"
         self._paint_device_corner(state="ok" if found else "idle", text=label)
         self.chip_device.set_state(found, label)
         if found:
@@ -748,11 +758,11 @@ class MainWindow(QMainWindow):
             self._session_label = None
         self._session_ok = ok
         if ok:
-            label = self._session_label or "Сессия OK"
+            label = self._session_label or "Apple ID ✓"
             if len(label) > 24:
                 label = label[:22] + "…"
         else:
-            label = "Войти…"
+            label = "Apple ID…"
         self.session_button.setText(label)
         self.session_button.setProperty("state", "ok" if ok else "idle")
         repolish(self.session_button)
@@ -815,6 +825,37 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self._refresh_passphrase_label()
 
+    def _on_create_desktop_shortcut(self) -> None:
+        from ios_restore.infrastructure import desktop_shortcut as desk
+
+        if sys.platform != "win32":
+            QMessageBox.information(
+                self,
+                "Ярлык",
+                "Ярлык на рабочий стол сейчас создаётся на Windows.",
+            )
+            return
+        try:
+            if not desk.is_frozen():
+                # Dev-run: point at python -m if no exe — still useful to say how.
+                QMessageBox.information(
+                    self,
+                    "Ярлык",
+                    "Ярлык на рабочий стол создаётся для portable-сборки "
+                    "(iCarcas.exe из ZIP). После распаковки Release снова "
+                    "откройте программу и нажмите «Ярлык».",
+                )
+                return
+            path = desk.create_desktop_shortcut(force=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "Ярлык", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Ярлык",
+            f"Готово. На рабочем столе появился ярлык:\n{path}",
+        )
+
     def _refresh_passphrase_label(self) -> None:
         if kc_pass.has_stored_passphrase():
             tip = (
@@ -829,9 +870,7 @@ class MainWindow(QMainWindow):
             )
             self.passphrase_chip.setText("Ключ не сохранён — при необходимости спросит консоль.")
         if hasattr(self, "session_button"):
-            base = self.session_button.toolTip().split("\n")[0]
-            if not base:
-                base = "Сессия App Store"
+            base = "Вход в ваш Apple ID. Зелёный цвет — вы вошли."
             self.session_button.setToolTip(f"{base}\n{tip}")
 
     def _on_save_passphrase(self) -> None:
@@ -1244,28 +1283,23 @@ class MainWindow(QMainWindow):
 
     def _append_env_status(self) -> None:
         report = DependencyService().check()
-        lines = ["Проверка компонентов:"]
-        for comp in report.components:
-            mark = "OK" if comp.ok else "НЕТ"
-            lines.append(f"  [{mark}] {comp.title}: {comp.detail}")
-        session = (
-            "локальные файлы сессии ipatool есть"
-            if self._appstore.session_files_present()
-            else "файлы сессии ipatool не найдены — нужен login"
-        )
-        lines.append(f"Пакеты: {self._packages_dir}")
-        lines.append(f"Сессия: {session}")
+        lines = [
+            "Готово к работе." if report.all_ok else "Нужна подготовка компьютера.",
+            "",
+            "1) Кабель USB → разблокировать телефон → «Доверять».",
+            "2) Справа вверху «Телефон…» → «Найти телефон».",
+            "3) «Apple ID…» → «Войти» (логин, пароль и код в чёрном окне).",
+            "4) Найти приложение → скачать → установить.",
+            "",
+        ]
         if not report.all_ok:
-            lines.append("")
-            lines.append("Не хватает компонентов — кнопка «Впервые здесь?» → «Установить недостающее».")
+            lines.append("Не хватает компонентов — нажмите «Впервые здесь?» → «Установить недостающее».")
+            for comp in report.components:
+                if not comp.ok:
+                    lines.append(f"  • {comp.title}")
         else:
-            lines.append("")
-            lines.append(
-                "Если GUI писал ошибку keyring — ограничение Windows/ipatool. "
-                "Кнопки с «…»: passphrase в консоли."
-            )
+            lines.append("Компоненты на месте. IPA сохраняются в папку packages.")
         self.output.setPlainText("\n".join(lines))
-        # Keep legacy adapter available for callers that expect exceptions.
         try:
             EnvironmentCliAdapter().check_tools()
         except Exception:  # noqa: BLE001
@@ -1274,8 +1308,11 @@ class MainWindow(QMainWindow):
     def _on_detect(self) -> None:
         if self._busy:
             return
-        self.set_device_working("Поиск…")
-        self._set_busy(True, "Поиск устройств…")
+        self.set_device_working("Ищем…")
+        self._set_busy(
+            True,
+            "Ищем телефон…\nПодключите кабель USB, разблокируйте экран и нажмите «Доверять».",
+        )
         worker = DetectDevicesWorker(self._device_adapter)
         worker.signals.finished.connect(self._on_devices_found)
         worker.signals.failed.connect(self._on_device_worker_failed)
@@ -1285,16 +1322,20 @@ class MainWindow(QMainWindow):
         if self._busy:
             return
         if not self._devices:
-            QMessageBox.information(self, "Нет устройства", "Сначала найдите устройство.")
+            QMessageBox.information(
+                self,
+                "Нет телефона",
+                "Сначала нажмите «Телефон…» → «Найти телефон».",
+            )
             return
         device = self._devices[0]
         QMessageBox.information(
             self,
             "Доверие",
-            "Разблокируйте устройство и при запросе нажмите «Доверять».",
+            "Разблокируйте телефон. Если появится запрос — нажмите «Доверять».",
         )
         self.set_device_working("Связь…")
-        self._set_busy(True, f"Установка доверия для {device.device_id}…")
+        self._set_busy(True, "Устанавливаем связь с телефоном…")
         worker = PairDeviceWorker(self._device_adapter, device.device_id)
         worker.signals.finished.connect(self._on_paired)
         worker.signals.failed.connect(self._on_device_worker_failed)
@@ -2466,18 +2507,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Архив покупок",
-                "Сессия App Store не найдена или истекла.\n"
-                "Сначала нажмите «Войти…» и завершите авторизацию "
-                "в консоли ipatool (Apple ID, пароль, Keychain passphrase, 2FA).",
+                "Нужно войти в Apple ID.\n"
+                "Справа вверху нажмите «Apple ID…» → «Войти» "
+                "и введите логин, пароль и код из SMS в чёрном окне.",
             )
             return
         if "SEARCH_FAILED" in message or "keyring" in message.lower():
             QMessageBox.information(
                 self,
-                "Поиск в App Store",
-                "Поиск через ipatool требует активной сессии App Store.\n"
-                "Сначала нажмите «Войти…» и завершите авторизацию.\n"
-                "Или используйте «Найти по регионам…» — поиск без входа в аккаунт.",
+                "Поиск",
+                "Нужно войти в Apple ID.\n"
+                "Справа вверху: «Apple ID…» → «Войти».\n"
+                "Или ищите через «Найти ID…» без входа — это только поиск номера.",
             )
             return
         self.output.setPlainText(message)
@@ -2505,6 +2546,7 @@ class MainWindow(QMainWindow):
             self.open_help_button,
             self.open_release_notes_button,
             self.replay_onboarding_button,
+            self.shortcut_button,
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)

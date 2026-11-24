@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QTextBrowser,
@@ -16,41 +19,67 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ios_restore.infrastructure import desktop_shortcut as desk
 from ios_restore.ui.tos import TOS_TEXT, accept_tos, tos_accepted
 
-ONBOARDING_VERSION = "1"
+# Bump when first-run copy changes so existing installs see the simpler guide once.
+ONBOARDING_VERSION = "2"
 ONBOARDING_KEY = "onboarding/completed_version"
 
 HELP_HTML = """
-<p><b>iCarcas</b> скачивает <b>ваши</b> приложения из App Store и ставит на iPhone/iPad.
-Пароли остаются только на этом компьютере.</p>
+<p><b>iCarcas</b> ставит на ваш iPhone или iPad приложения, которые уже были
+на <b>вашем</b> Apple ID. Пароли никуда не отправляются.</p>
+
+<h3>Как пользоваться</h3>
 <ol>
-<li><b>iOS…</b> — подключить кабель, «Доверять», найти устройство.</li>
-<li><b>Войти…</b> — Apple ID в консоли (пароль и код).</li>
-<li>Найти ID → скачать IPA → <b>Установить на устройство</b>.</li>
+<li>Возьмите <b>кабель USB</b>, подключите телефон к компьютеру и
+<b>разблокируйте</b> экран. На телефоне нажмите <b>«Доверять»</b>.</li>
+<li>Справа вверху нажмите <b>«Телефон…»</b> → «Найти телефон».</li>
+<li>Нажмите <b>«Apple ID…»</b> → «Войти». Откроется чёрное окно —
+введите логин, пароль и код из SMS. Это нормально.</li>
+<li>Найдите приложение → <b>«Скачать»</b> → <b>«Установить на устройство»</b>.</li>
 </ol>
-<p>Скачивается только то, что уже было на этом Apple ID.
-«Найти ID» само по себе право скачать не даёт.</p>
+
+<p>Если телефон не находится — кнопка <b>«Впервые здесь?»</b>: проверка
+и установка нужных компонентов одной кнопкой.</p>
+
+<p>Скачивается только то, что уже покупали или ставили на этом Apple ID.
+Просто найти название в поиске — ещё не значит, что можно скачать.</p>
 """
 
 _PAGES: tuple[tuple[str, str], ...] = (
     (
-        "Добро пожаловать в iCarcas",
-        "Скачиваем ваши приложения из App Store и ставим на iPhone или iPad.\n"
-        "Данные остаются только на этом компьютере.",
+        "Добро пожаловать",
+        "iCarcas помогает вернуть на iPhone или iPad ваши приложения из App Store.\n\n"
+        "Нужны только кабель USB и ваш Apple ID.\n"
+        "Пароль остаётся на этом компьютере — в интернет «на сторону» он не уходит.",
     ),
     (
-        "Три шага",
-        "1) «iOS…» — найти устройство.\n"
-        "2) «Войти…» — свой Apple ID в консоли.\n"
-        "3) Найти ID → скачать → установить.\n\n"
-        "Консоль может спросить passphrase — это не пароль Apple ID, "
-        "а локальный ключ. Его можно сохранить на этом ПК.",
+        "Подключите телефон",
+        "1. Возьмите обычный кабель USB (тот, которым заряжаете телефон).\n"
+        "2. Вставьте в компьютер и в iPhone / iPad.\n"
+        "3. Разблокируйте телефон.\n"
+        "4. На экране телефона нажмите «Доверять этому компьютеру».\n\n"
+        "Потом в программе справа вверху: кнопка «Телефон…» → «Найти телефон».\n"
+        "Когда телефон найден, кнопка станет зелёной.",
     ),
     (
-        "Важно",
-        "Качается только то, что уже было на вашем Apple ID.\n"
-        "Если лицензии нет — будет ошибка Apple, это не баг iCarcas.",
+        "Войдите в Apple ID",
+        "Справа вверху нажмите «Apple ID…» → «Войти».\n\n"
+        "Откроется отдельное чёрное окно — так и должно быть.\n"
+        "Введите:\n"
+        "• свой Apple ID (почту),\n"
+        "• пароль,\n"
+        "• код из SMS или с другого устройства Apple.\n\n"
+        "После успешного входа кнопка станет зелёной.\n"
+        "Дальше: найдите приложение → скачайте → установите на телефон.",
+    ),
+    (
+        "Важно знать",
+        "Ставятся только приложения, которые уже были на вашем Apple ID "
+        "(покупки или прошлые установки).\n\n"
+        "Если Apple пишет, что нужна лицензия — этого приложения на аккаунте нет.\n"
+        "Это ограничение магазина, а не поломка программы.",
     ),
 )
 
@@ -97,12 +126,11 @@ def show_help_dialog(parent: QWidget | None = None) -> None:
         title="Справка — как пользоваться",
         html=HELP_HTML,
         width=560,
-        height=480,
+        height=520,
     )
 
 
 def show_setup_dialog(parent: QWidget | None = None) -> None:
-    # Interactive check + one-button install (replaces static HTML).
     from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
 
     show_dependencies_dialog(parent)
@@ -114,7 +142,7 @@ class OnboardingDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Знакомство с iCarcas")
-        self.setMinimumSize(520, 420)
+        self.setMinimumSize(540, 460)
         self._settings = QSettings("iCarcas", "iCarcas")
 
         root = QVBoxLayout(self)
@@ -166,6 +194,15 @@ class OnboardingDialog(QDialog):
         self.tos_check = QCheckBox("Понимаю и принимаю условия")
         layout.addWidget(heading)
         layout.addWidget(text, 1)
+        offer_shortcut = (
+            sys.platform == "win32"
+            and desk.is_frozen()
+            and desk.app_launch_target() is not None
+        )
+        self.shortcut_check = QCheckBox("Создать ярлык iCarcas на рабочем столе")
+        self.shortcut_check.setChecked(offer_shortcut)
+        self.shortcut_check.setVisible(offer_shortcut)
+        layout.addWidget(self.shortcut_check)
         layout.addWidget(self.tos_check)
         return page
 
@@ -198,6 +235,20 @@ class OnboardingDialog(QDialog):
             return
         accept_tos(self._settings)
         mark_onboarding_done(self._settings)
+        if self.shortcut_check.isVisible() and self.shortcut_check.isChecked():
+            try:
+                path = desk.create_desktop_shortcut()
+                QMessageBox.information(
+                    self,
+                    "Ярлык",
+                    f"Ярлык создан на рабочем столе:\n{path.name}",
+                )
+            except OSError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Ярлык",
+                    f"Не удалось создать ярлык автоматически.\n{exc}",
+                )
         self.accept()
 
 
@@ -211,6 +262,5 @@ def ensure_onboarding(parent: QWidget | None = None) -> bool:
         return True
     dialog = OnboardingDialog(parent)
     if dialog.exec() != QDialog.DialogCode.Accepted:
-        # Allow continuing only if somehow already accepted ToS earlier.
         return tos_accepted(settings) and onboarding_done(settings)
     return True
