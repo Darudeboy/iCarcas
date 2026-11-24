@@ -24,8 +24,9 @@ pip install -e ".[dev]"
 
 ```bash
 brew install libimobiledevice ideviceinstaller
-# или по подсказке из «Впервые здесь?»
 ```
+
+Или в приложении: «Впервые здесь?» → «Установить недостающее» (сам вызовет brew).
 
 ipatool:
 

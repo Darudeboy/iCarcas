@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from ios_restore.domain.errors import ErrorCode, RestoreError
 from ios_restore.infrastructure.logging_setup import redact_secrets
+from ios_restore.infrastructure.paths import macos_brew_bin_dirs
 
 logger = logging.getLogger("ios_restore.process")
 
@@ -190,6 +192,13 @@ class ProcessRunner:
             for key, value in extra_env.items():
                 if key in self._env_allowlist:
                     env[key] = value
+        # Finder-launched .app often has a PATH without Homebrew.
+        if sys.platform == "darwin":
+            brew_prefix = os.pathsep.join(str(p) for p in macos_brew_bin_dirs())
+            path = env.get("PATH", "")
+            env["PATH"] = (
+                f"{brew_prefix}{os.pathsep}{path}" if path else brew_prefix
+            )
         return env
 
     def _truncate(self, text: str) -> str:

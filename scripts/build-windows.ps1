@@ -1,13 +1,12 @@
 # Build Windows portable onedir ZIP (run on Windows).
-# Usage (from repo root):
-#   .\scripts\build-windows.ps1
+# Usage (from repo root): .\scripts\build-windows.ps1
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $Py = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Py)) {
-  throw "No .venv — create it and pip install -e .[dev] first"
+  throw "No .venv - create venv and pip install -e .[dev] first"
 }
 
 & $Py -m pip install -U pip
@@ -21,7 +20,7 @@ New-Item -ItemType Directory -Force -Path $Dist, $Build | Out-Null
 
 $Entry = Join-Path $Root "src\ios_restore\__main__.py"
 $Icon = Join-Path $Root "assets\favicon.ico"
-$Args = @(
+$PiArgs = @(
   "-m", "PyInstaller",
   "--noconfirm", "--clean", "--windowed", "--onedir",
   "--name", $Name,
@@ -35,9 +34,9 @@ $Args = @(
   "--exclude-module", "PySide6.QtWebEngineCore",
   "--exclude-module", "PySide6.QtWebEngineWidgets"
 )
-if (Test-Path $Icon) { $Args += @("--icon", $Icon) }
-$Args += $Entry
-& $Py @Args
+if (Test-Path $Icon) { $PiArgs += @("--icon", $Icon) }
+$PiArgs += $Entry
+& $Py @PiArgs
 
 $AppDir = Join-Path $Dist $Name
 foreach ($sub in @("tools\libimobiledevice", "packages", "data", "assets")) {
@@ -54,20 +53,23 @@ foreach ($script in @("download_one.py", "list_versions_dump.py", "list_purchase
   if (Test-Path $src) { Copy-Item $src (Join-Path $AppDir "tools\") -Force }
 }
 
-@"
-iCarcas for Windows
-
-1) Run iCarcas.exe
-2) «Впервые здесь?» — install tools / Apple drivers if needed
-3) Cable → Trust → Device → Find → Apple ID → Sign in
-
-See client-first-run.md
-"@ | Set-Content -Encoding UTF8 (Join-Path $AppDir "README.txt")
+$Readme = @(
+  "iCarcas for Windows",
+  "",
+  "1) Run iCarcas.exe",
+  "2) Open First time here? to install tools / Apple drivers if needed",
+  "3) Cable -> Trust -> Device -> Find -> Apple ID -> Sign in",
+  "",
+  "See client-first-run.md"
+) -join "`r`n"
+[IO.File]::WriteAllText((Join-Path $AppDir "README.txt"), $Readme)
 
 $Zip = Join-Path $Dist "iCarcas-windows.zip"
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path $AppDir -DestinationPath $Zip -Force
-$VerZip = Join-Path $Dist "iCarcas-windows-v$((Get-Content pyproject.toml | Select-String '^version').ToString().Split('"')[1]).zip"
+$VerLine = (Select-String -Path "pyproject.toml" -Pattern '^version\s*=').Line
+$Ver = ($VerLine -split '"')[1]
+$VerZip = Join-Path $Dist ("iCarcas-windows-v{0}.zip" -f $Ver)
 Copy-Item $Zip $VerZip -Force
 
 Write-Host "Done:"

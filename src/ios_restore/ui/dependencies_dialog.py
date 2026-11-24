@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QDialog,
@@ -16,7 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ios_restore.application.dependency_service import DependencyReport, DependencyService
+from ios_restore.application.dependency_service import (
+    BREW_HINT,
+    DependencyReport,
+    DependencyService,
+)
 from ios_restore.ui.theme import repolish
 
 
@@ -54,8 +60,8 @@ class DependenciesDialog(QDialog):
             "Перед первым подключением iPhone или iPad проверьте этот список.\n\n"
             "«Установить недостающее» скачает служебные файлы "
             "(на Windows — ещё и драйверы Apple, если можно).\n"
-            "На Mac утилиты для устройства при необходимости ставятся через Homebrew — "
-            "программа подскажет команду.\n\n"
+            "На Mac недостающие idevice* ставятся через Homebrew одной кнопкой "
+            f"(нужен brew: {BREW_HINT}).\n\n"
             "Потом: кабель USB → «Доверять» на устройстве → "
             "«Устройство…» → «Найти устройство»."
         )
@@ -135,13 +141,23 @@ class DependenciesDialog(QDialog):
             )
         else:
             still = ", ".join(c.title for c in report.missing)
+            if sys.platform == "darwin":
+                hint = (
+                    "Если Homebrew ещё не установлен — https://brew.sh\n"
+                    f"Или вручную в Терминале:\n  {BREW_HINT}"
+                )
+            else:
+                hint = (
+                    "Для Apple Mobile Device Support может понадобиться "
+                    "запуск от администратора:\n"
+                    "winget install --id Apple.AppleMobileDeviceSupport -e"
+                )
             QMessageBox.warning(
                 self,
                 "Ещё не всё",
                 "Часть компонентов всё ещё отсутствует:\n"
                 f"{still}\n\n"
-                "Для Apple Mobile Device Support может понадобиться запуск от администратора:\n"
-                "winget install --id Apple.AppleMobileDeviceSupport -e",
+                f"{hint}",
             )
 
     def _on_repair_failed(self, message: str) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -12,7 +13,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from ios_restore.infrastructure.paths import default_tools_dir, project_root, resolve_tool
+from ios_restore.infrastructure.paths import (
+    default_tools_dir,
+    find_brew,
+    project_root,
+    resolve_tool,
+)
 
 SUITE_URL = (
     "https://github.com/L1ghtmann/libimobiledevice/releases/download/"
@@ -31,10 +37,7 @@ IPATOOL_URL_DARWIN_AMD = (
     "v2.8.1/ipatool-2.8.1-macos-amd64.tar.gz"
 )
 SCRIPTS_BASE = "https://raw.githubusercontent.com/Darudeboy/iCarcas/main/tools/"
-BREW_HINT = (
-    "brew tap libimobiledevice/homebrew-libimobiledevice && "
-    "brew install libimobiledevice ideviceinstaller"
-)
+BREW_HINT = "brew install libimobiledevice ideviceinstaller"
 
 DEVICE_TOOLS = (
     "idevice_id",
@@ -142,10 +145,8 @@ class DependencyService:
 
         device_missing = [k for k in missing_keys if k.startswith("device:")]
         if device_missing and sys.platform == "darwin":
-            note(
-                "Утилиты для телефона на Mac ставятся через Homebrew. "
-                f"В Терминале: {BREW_HINT}"
-            )
+            note(f"Ставлю утилиты телефона через Homebrew ({BREW_HINT})…")
+            self._ensure_device_tools_macos(progress=note)
 
         note("Проверяю ещё раз…")
         return self.check()
@@ -228,24 +229,21 @@ class DependencyService:
     def _check_device_tool(self, name: str) -> ComponentStatus:
         path = self._resolve_cli(name)
         ok = path is not None and path.is_file()
-        detail = str(path) if ok else f"Нет в {self._tools_dir}"
+        detail = str(path) if ok else f"Нет в {self._tools_dir} и не найден в PATH/Homebrew"
         if not ok and sys.platform == "darwin":
-            detail += f". Установите: {BREW_HINT}"
+            detail += f". Кнопка установит через Homebrew, либо вручную: {BREW_HINT}"
         return ComponentStatus(
             key=f"device:{name}",
             title=name,
             ok=ok,
             detail=detail,
-            repairable=sys.platform == "win32" or name == "ipatool",
+            repairable=sys.platform in ("win32", "darwin"),
         )
 
     def _resolve_cli(self, name: str) -> Path | None:
         path = resolve_tool(name, self._tools_dir)
         if path.is_file():
             return path
-        which = shutil.which(name)
-        if which:
-            return Path(which)
         return None
 
     def _check_script(self, name: str) -> ComponentStatus:
@@ -284,6 +282,45 @@ class DependencyService:
                     target.chmod(0o755)
                 except OSError:
                     pass
+
+    def _ensure_device_tools_macos(self, *, progress=None) -> None:
+        """Install libimobiledevice + ideviceinstaller via Homebrew."""
+
+        def note(msg: str) -> None:
+            if progress:
+                progress(msg)
+
+        brew = find_brew()
+        if brew is None:
+            raise RuntimeError(
+                "Homebrew не найден (нет brew в /opt/homebrew/bin или /usr/local/bin).\n"
+                "Установите Homebrew с https://brew.sh , затем в Терминале:\n"
+                f"  {BREW_HINT}\n"
+                "После этого снова нажмите «Установить недостающее»."
+            )
+        note(f"Запускаю {brew} install … (может занять несколько минут)")
+        env = os.environ.copy()
+        # GUI apps often miss brew PATH; keep brew's own prefix first.
+        env["PATH"] = f"{brew.parent}{os.pathsep}{env.get('PATH', '')}"
+        proc = subprocess.run(
+            [str(brew), "install", "libimobiledevice", "ideviceinstaller"],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=env,
+        )
+        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if proc.returncode != 0:
+            low = out.lower()
+            if "already installed" in low or "up-to-date" in low:
+                note("Пакеты Homebrew уже установлены.")
+                return
+            raise RuntimeError(
+                "Не удалось установить утилиты через Homebrew.\n"
+                f"Код {proc.returncode}. В Терминале выполните:\n  {BREW_HINT}\n\n"
+                f"{out[-900:]}"
+            )
+        note("Homebrew: готово.")
 
     def _install_ipatool_archive(self, url: str, tmp_path: Path, *, exe_name: str) -> None:
         ipa_tg = tmp_path / "ipatool.tar.gz"

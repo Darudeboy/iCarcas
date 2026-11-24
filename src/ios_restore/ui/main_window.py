@@ -71,6 +71,7 @@ from ios_restore.ui.apple_ui import (
     Row,
     Sidebar,
     Tile,
+    Toggle,
 )
 from ios_restore.ui.brand_icon import load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
@@ -407,6 +408,10 @@ class MainWindow(QMainWindow):
             ("Журнал", "log", "gray"),
         ]
         self.sidebar = Sidebar(pages, f"v{_app_version()}", parent=shell)
+        self.theme_toggle = Toggle(theme=True)
+        self.theme_toggle.setToolTip("Светлая / тёмная тема")
+        self.theme_toggle.toggled.connect(self._on_theme_toggled)
+        self.sidebar.set_theme_toggle(self.theme_toggle)
         content = aui.styled(QWidget(shell), "content")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -448,7 +453,7 @@ class MainWindow(QMainWindow):
         self.card_store = _FlowCard(self.tiles, "B", self.flow_status)
         self.card_app = _FlowCard(self.tiles, "C", self.flow_status)
 
-        self._refresh_theme_button()
+        self._sync_theme_toggle()
         self._refresh_passphrase_label()
         self.set_session_chip(self._appstore.session_files_present())
         self.set_device_chip(False)
@@ -522,13 +527,6 @@ class MainWindow(QMainWindow):
         r_short = Row("Ярлык", "На рабочий стол")
         r_short.add_tail(self.shortcut_button)
         help_g.add(r_short)
-
-        self.theme_button = AppleButton("", "plain")
-        self.theme_button.setToolTip("Переключить светлую / тёмную тему")
-        self.theme_button.clicked.connect(self._toggle_theme)
-        r_theme = Row("Тема", "Светлая или тёмная")
-        r_theme.add_tail(self.theme_button)
-        help_g.add(r_theme)
         p.lay.addWidget(help_g)
 
         self.privacy_label = QLabel(
@@ -769,14 +767,13 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._append_env_status)
         QTimer.singleShot(0, self._bootstrap_tos_and_session)
 
-    def _refresh_theme_button(self) -> None:
-        if self._mode == "dark":
-            self.theme_button.setText("Светлая")
-        else:
-            self.theme_button.setText("Тёмная")
+    def _sync_theme_toggle(self) -> None:
+        self.theme_toggle.blockSignals(True)
+        self.theme_toggle.setChecked(self._mode == "dark")
+        self.theme_toggle.blockSignals(False)
 
-    def _toggle_theme(self) -> None:
-        self.apply_theme("light" if self._mode == "dark" else "dark")
+    def _on_theme_toggled(self, on: bool) -> None:
+        self.apply_theme("dark" if on else "light")
 
     def apply_theme(self, mode: str) -> None:
         if mode not in ("light", "dark"):
@@ -790,7 +787,7 @@ class MainWindow(QMainWindow):
                 app.setPalette(build_palette(mode))
             app.setStyleSheet(aui.qss())
         self.sidebar.retheme()
-        self._refresh_theme_button()
+        self._sync_theme_toggle()
         for widget in self.findChildren(QWidget):
             widget.update()
             if widget.property("state") is not None:
@@ -2720,7 +2717,7 @@ class MainWindow(QMainWindow):
             self.open_setup_button,
             self.replay_onboarding_button,
             self.shortcut_button,
-            self.theme_button,
+            self.theme_toggle,
         ):
             if btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)

@@ -2,11 +2,13 @@
 
 Тема:       set_theme("light" | "dark"); app.setStyleSheet(qss())
 Кнопки:     AppleButton(text, kind="tinted" | "filled" | "danger" | "plain", large=False)
+Переключат.: Toggle(theme=True) — солнце/луна; иначе обычный switch
 Навигация:  Sidebar (скользящая плашка выбора) + FadeStack (плавная смена страниц)
 Контент:    Page, Group, Row, Tile, StatusDot, ProgressLine
 """
 from __future__ import annotations
 
+from math import cos, radians, sin
 from string import Template
 
 from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation,
@@ -76,6 +78,7 @@ QLabel#large { font-size: 28px; font-weight: 700; }
 QLabel#brand { font-size: 22px; font-weight: 700; }
 QLabel#sub, QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { color: $sub; }
 QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { font-size: 12px; }
+QLabel#themeLabel { color: $text; font-size: 13px; font-weight: 600; }
 QLabel#rowTitle { font-size: 14px; font-weight: 500; }
 QLabel#downloadStateTitle { font-size: 14px; font-weight: 600; }
 QLabel#downloadStateDetail, QLabel#downloadProgressLabel { color: $sub; font-size: 12px; }
@@ -234,6 +237,122 @@ class AppleButton(HoverButton):
         p.setPen(fg); p.drawText(r, Qt.AlignCenter, self.text())
 
 
+class Toggle(QAbstractButton):
+    """Компактный switch. theme=True → солнце/луна (checked = тёмная тема)."""
+
+    def __init__(self, parent=None, *, compact=True, theme=False):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self._theme = bool(theme)
+        if self._theme:
+            self._w, self._h = (54, 28)
+        else:
+            self._w, self._h = (42, 26) if compact else (51, 31)
+        self.setFixedSize(self._w, self._h)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._knob = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(lambda v: (setattr(self, "_knob", float(v)), self.update()))
+        self.toggled.connect(self._animate_to)
+
+    def _animate_to(self, on: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(float(self._knob))
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802
+        checked = bool(checked)
+        jumping = self.signalsBlocked()
+        if self.isChecked() == checked:
+            if jumping:
+                self._anim.stop()
+                self._knob = 1.0 if checked else 0.0
+                self.update()
+            return
+        super().setChecked(checked)
+        if jumping:
+            self._anim.stop()
+            self._knob = 1.0 if checked else 0.0
+            self.update()
+
+    def sizeHint(self):  # noqa: N802
+        return QSize(self._w, self._h)
+
+    @staticmethod
+    def _draw_sun(p: QPainter, c: QPointF, color: QColor) -> None:
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawEllipse(c, 3.2, 3.2)
+        p.setPen(QPen(color, 1.4, Qt.SolidLine, Qt.RoundCap))
+        for deg in range(0, 360, 45):
+            a = radians(deg)
+            p.drawLine(
+                QPointF(c.x() + cos(a) * 5.0, c.y() + sin(a) * 5.0),
+                QPointF(c.x() + cos(a) * 7.2, c.y() + sin(a) * 7.2),
+            )
+
+    @staticmethod
+    def _draw_moon(p: QPainter, c: QPointF, color: QColor) -> None:
+        # Crescent: full circle minus offset circle.
+        path = QPainterPath()
+        path.addEllipse(c, 5.0, 5.0)
+        cut = QPainterPath()
+        cut.addEllipse(QPointF(c.x() + 2.4, c.y() - 1.2), 4.2, 4.2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawPath(path.subtracted(cut))
+
+    def paintEvent(self, _):  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        if not self.isEnabled():
+            p.setOpacity(0.4)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        t = self._knob
+
+        if self._theme:
+            day = QColor("#F5A524")
+            night = QColor("#3A3A5C")
+            track = QColor(
+                int(day.red() + (night.red() - day.red()) * t),
+                int(day.green() + (night.green() - day.green()) * t),
+                int(day.blue() + (night.blue() - day.blue()) * t),
+            )
+        else:
+            off = QColor("#AEAEB2") if P["text"].lightness() < 128 else QColor("#636366")
+            on = P["green"]
+            track = QColor(
+                int(off.red() + (on.red() - off.red()) * t),
+                int(off.green() + (on.green() - off.green()) * t),
+                int(off.blue() + (on.blue() - off.blue()) * t),
+            )
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(track)
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+
+        kn = self._h - 6.0
+        pad = (r.height() - kn) / 2
+        x = r.x() + pad + (r.width() - kn - 2 * pad) * t
+        knob = QRectF(x, r.y() + pad, kn, kn)
+        p.setBrush(QColor(0, 0, 0, 36))
+        p.drawEllipse(knob.translated(0, 0.8))
+        p.setBrush(QColor("white"))
+        p.drawEllipse(knob)
+
+        if self._theme:
+            # Icon lives on the knob only — sun for day, moon for night.
+            c = knob.center()
+            if t < 1.0:
+                self._draw_sun(p, c, QColor(245, 165, 36, max(0, int(255 * (1.0 - t)))))
+            if t > 0.0:
+                self._draw_moon(p, c, QColor(91, 108, 158, max(0, int(255 * t))))
+
+
 # -------------------------------------------------------------------- навигация
 class NavItem(HoverButton):
     def __init__(self, text, glyph, color, parent=None):
@@ -276,6 +395,15 @@ class Sidebar(_ParentRevealMixin, QWidget):
         self.brand = QLabel(self); self.brand.setObjectName("brand"); self.brand.setTextFormat(Qt.RichText)
         self.brand.setContentsMargins(10, 0, 0, 0); outer.addWidget(self.brand)
 
+        # Theme control under brand — sun/moon toggle, no label needed.
+        self.theme_row = QWidget(self)
+        tr = QHBoxLayout(self.theme_row)
+        tr.setContentsMargins(10, 0, 4, 0)
+        tr.setSpacing(0)
+        tr.addStretch(1)
+        self.theme_slot = tr
+        outer.addWidget(self.theme_row)
+
         self.holder = QWidget(self); hl = QVBoxLayout(self.holder)
         hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(2)
         self.pill = _Pill(self.holder)                      # создан первым → лежит под кнопками
@@ -291,6 +419,10 @@ class Sidebar(_ParentRevealMixin, QWidget):
         self._anim = QPropertyAnimation(self.pill, b"geometry", self)
         self._anim.setDuration(300); self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self.retheme()
+
+    def set_theme_toggle(self, toggle: QWidget) -> None:
+        self.theme_slot.addWidget(toggle)
+        _clear_top_flash(toggle)
 
     def retheme(self):
         self.brand.setText(f'<span style="color:{_hex["blue"]}">i</span>Carcas')

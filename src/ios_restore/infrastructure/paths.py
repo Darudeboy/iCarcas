@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -18,8 +20,24 @@ def default_tools_dir() -> Path:
     return project_root() / "tools" / "libimobiledevice"
 
 
+def macos_brew_bin_dirs() -> tuple[Path, ...]:
+    """Homebrew prefixes — Finder-launched .app often has a stripped PATH."""
+    return (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
+
+
+def find_brew() -> Path | None:
+    which = shutil.which("brew")
+    if which:
+        return Path(which)
+    for base in macos_brew_bin_dirs():
+        cand = base / "brew"
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
 def resolve_tool(name: str, tools_dir: Path | None = None) -> Path:
-    """Return absolute path to a tool executable if present locally or on PATH concept."""
+    """Return absolute path to a tool if present locally, on PATH, or in Homebrew bins."""
     base = tools_dir or default_tools_dir()
     stem = name[:-4] if name.lower().endswith(".exe") else name
     candidates: list[str] = []
@@ -33,5 +51,19 @@ def resolve_tool(name: str, tools_dir: Path | None = None) -> Path:
         candidate = base / exe_name
         if candidate.is_file():
             return candidate
+
+    which = shutil.which(stem) or (
+        shutil.which(f"{stem}.exe") if sys.platform == "win32" else None
+    )
+    if which:
+        return Path(which)
+
+    if sys.platform == "darwin":
+        for directory in macos_brew_bin_dirs():
+            for exe_name in candidates:
+                cand = directory / exe_name
+                if cand.is_file() and os.access(cand, os.X_OK):
+                    return cand
+
     # Bare name fallback (PATH resolution at spawn time).
     return Path(stem if sys.platform != "win32" else f"{stem}.exe")
