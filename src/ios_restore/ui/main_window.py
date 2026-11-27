@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer, QUrl
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -39,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from ios_restore.application.diagnostics_service import DiagnosticsService
+from ios_restore.application.system_health_service import SystemHealthService
 from ios_restore.application.license_check_service import LicenseCheckService
 from ios_restore.application.regional_search_service import RegionalAppSearchService
 from ios_restore.application.smart_search_service import SmartAppSearchService
@@ -73,10 +77,12 @@ from ios_restore.ui.apple_ui import (
     Tile,
     Toggle,
 )
+from ios_restore.ui.liquid_search import LiquidSearchBar
 from ios_restore.ui.brand_icon import load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.application.dependency_service import DependencyService
 from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
+from ios_restore.ui.system_doctor_dialog import show_system_doctor
 from ios_restore.ui.onboarding import (
     ensure_onboarding,
     show_help_dialog,
@@ -476,6 +482,30 @@ class MainWindow(QMainWindow):
             "Начало работы",
             "Свои приложения из App Store на iPhone и iPad",
         )
+        # Live overview: never claim a connection before a device probe.
+        overview = Group()
+        self.home_device = Row("iPhone / iPad", "Устройство ещё не проверялось", lead=Tile("green", "1"))
+        self.home_device.add_tail(self._home_nav_button("Устройства", 1))
+        overview.add(self.home_device)
+        self.home_session = Row("Apple ID", "Проверка сессии ещё не выполнялась", lead=Tile("blue", "2"))
+        self.home_session.add_tail(self._home_nav_button("Аккаунт", 2))
+        overview.add(self.home_session)
+        self.home_package = Row("IPA для установки", "Файл ещё не выбран", lead=Tile("purple", "3"))
+        self.home_package.add_tail(self._home_nav_button("Приложения", 3))
+        overview.add(self.home_package)
+        p.lay.addWidget(overview)
+
+        recent_group = Group()
+        self.home_recent = Row("Последняя операция", "История операций пуста", lead=Tile("gray", "4"))
+        self.home_recent.add_tail(self._home_nav_button("Журнал", 4))
+        recent_group.add(self.home_recent)
+        p.lay.addWidget(recent_group)
+        self._refresh_home_recent()
+
+        section = QLabel("БЫСТРЫЙ СТАРТ", p)
+        section.setObjectName("sectionEyebrow")
+        p.lay.addWidget(section)
+
         g = Group()
         steps = [
             ("A", "Подключите устройство", "USB-кабель, экран разблокирован", 1),
@@ -504,6 +534,17 @@ class MainWindow(QMainWindow):
         r_setup = Row("Подготовка ПК", "Утилиты, драйверы, ipatool")
         r_setup.add_tail(self.open_setup_button)
         help_g.add(r_setup)
+
+        self.doctor_button = AppleButton("Проверить систему", "plain")
+        self.doctor_button.setToolTip(
+            "Проверка компонентов, места на диске, подключения и сессии"
+        )
+        self.doctor_button.clicked.connect(self._on_system_doctor)
+        doctor_row = Row(
+            "System Doctor", "Причины проблем и рекомендации по исправлению"
+        )
+        doctor_row.add_tail(self.doctor_button)
+        help_g.add(doctor_row)
 
         self.release_notes_button = AppleButton("Что нового", "plain")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
@@ -540,6 +581,25 @@ class MainWindow(QMainWindow):
         p.lay.addStretch(1)
         return self._wrap_scroll(p)
 
+    def _home_nav_button(self, text: str, index: int) -> AppleButton:
+        button = AppleButton(text, "plain")
+        button.clicked.connect(lambda _=False, i=index: self.sidebar.select(i))
+        return button
+
+    def _refresh_home_recent(self) -> None:
+        try:
+            entries = self._history.list_entries(limit=1)
+        except OSError:
+            self.home_recent.set_sub("Не удалось прочитать историю")
+            return
+        if not entries:
+            self.home_recent.set_sub("Пока нет скачиваний и установок")
+            return
+        entry = entries[0]
+        action = "Скачано" if entry.kind == "download" else "Установлено"
+        name = entry.display_name or entry.bundle_id or entry.store_id or "Приложение"
+        self.home_recent.set_sub(f"{action}: {name} · {entry.at[:16].replace('T', ' ')} UTC")
+
     def _build_page_device(self) -> QWidget:
         p = Page("Устройство", "Подключение iPhone или iPad к этому компьютеру")
         g = Group()
@@ -556,6 +616,21 @@ class MainWindow(QMainWindow):
         g.add(self.row_device)
         g.add(self.row_trust)
         p.lay.addWidget(g)
+
+        info = Group()
+        self.device_details = Row(
+            "Сведения об устройстве",
+            "Название и версия iOS появятся после обнаружения устройства",
+        )
+        info.add(self.device_details)
+        self.device_guidance = Row(
+            "Как подключить",
+            "1. Подключите USB-кабель. 2. Разблокируйте экран. "
+            "3. Подтвердите доверие. 4. Нажмите «Найти устройство».",
+        )
+        self.device_guidance.sub.setWordWrap(True)
+        info.add(self.device_guidance)
+        p.lay.addWidget(info)
         p.lay.addStretch(1)
         return self._wrap_scroll(p)
 
@@ -610,52 +685,74 @@ class MainWindow(QMainWindow):
         return self._wrap_scroll(p)
 
     def _build_page_app(self) -> QWidget:
-        p = Page("Приложение", "Поиск, загрузка IPA и установка на устройство")
+        p = Page("Восстановление приложения", "Найдите конкретное приложение, проверьте лицензию и восстановите IPA")
 
-        search_g = Group()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(
-            "Название или коротко: МЭШ, Матч, Store ID, bundle…"
-        )
-        self.search_input.setClearButtonEnabled(True)
-        search_g.add(self.search_input)
-
+        search_bar = LiquidSearchBar(p)
+        self.search_input = search_bar.search_input
+        self.region_selector = search_bar.region_selector
+        self.regional_search_button = search_bar.search_button
         self._region_code = "RU"
-        self._region_tags: dict[str, QPushButton] = {}
-        region_wrap = QWidget(p)
-        region_grid = QGridLayout(region_wrap)
-        region_grid.setContentsMargins(12, 8, 12, 8)
-        region_grid.setHorizontalSpacing(6)
-        region_grid.setVerticalSpacing(6)
-        region_cols = 4
-        for index, region in enumerate(RegionalAppSearchService.known_regions()):
-            tag = QPushButton(region.name, region_wrap)
-            tag.setObjectName("regionTag")
-            tag.setCursor(Qt.CursorShape.PointingHandCursor)
-            tag.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            tag.setToolTip(f"Регион App Store: {region.name} ({region.code})")
-            tag.clicked.connect(
-                lambda _checked=False, code=region.code: self._select_region(code)
+        for region in RegionalAppSearchService.known_regions():
+            self.region_selector.addItem(f"{region.name} · {region.code}", region.code)
+        self.region_selector.currentIndexChanged.connect(
+            lambda _index: self._select_region(
+                str(self.region_selector.currentData() or "RU")
             )
-            self._region_tags[region.code] = tag
-            region_grid.addWidget(tag, index // region_cols, index % region_cols)
-        search_g.add(region_wrap)
-        self._select_region("RU")
-
-        r_find = Row("Поиск Store ID", "Скачивание — только при лицензии на аккаунте")
-        self.regional_search_button = AppleButton("Найти ID…", "filled")
+        )
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
-        r_find.add_tail(self.regional_search_button)
-        search_g.add(r_find)
-        p.lay.addWidget(search_g)
+        self.search_input.returnPressed.connect(self._on_regional_search_app)
+        p.lay.addWidget(search_bar)
 
         app_g = Group()
-        self.app_input = QLineEdit()
+        # Focused App Store-style card; populated only after choosing an app.
+        self.selected_app_card = QFrame(p)
+        self.selected_app_card.setObjectName("selectedAppCard")
+        self.selected_app_card.setStyleSheet(
+            "QFrame#selectedAppCard { background: palette(base); "
+            "border: 1px solid #D9E5EB; border-radius: 18px; }"
+        )
+        selected_layout = QHBoxLayout(self.selected_app_card)
+        selected_layout.setContentsMargins(20, 18, 20, 18)
+        selected_layout.setSpacing(18)
+        self.selected_app_icon = QLabel(self.selected_app_card)
+        self.selected_app_icon.setFixedSize(76, 76)
+        self.selected_app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selected_app_icon.setStyleSheet(
+            "background: #E8F2F4; border-radius: 16px; color: #52727B;"
+        )
+        self.selected_app_icon.setText("APP")
+        selected_layout.addWidget(self.selected_app_icon)
+        selected_text = QVBoxLayout()
+        self.selected_app_title = QLabel("Выберите приложение")
+        self.selected_app_title.setStyleSheet(
+            "font-size: 19px; font-weight: 700; border: none;"
+        )
+        self.selected_app_title.setWordWrap(True)
+        selected_text.addWidget(self.selected_app_title)
+        self.selected_app_meta = QLabel(
+            "Найдите приложение по названию или идентификатору"
+        )
+        self.selected_app_meta.setWordWrap(True)
+        self.selected_app_meta.setStyleSheet(
+            "color: #638091; border: none;"
+        )
+        selected_text.addWidget(self.selected_app_meta)
+        self.selected_app_license = QLabel("Лицензия ещё не проверена")
+        self.selected_app_license.setWordWrap(True)
+        self.selected_app_license.setStyleSheet(
+            "color: #087D88; font-weight: 600; border: none;"
+        )
+        selected_text.addWidget(self.selected_app_license)
+        selected_layout.addLayout(selected_text, 1)
+        p.lay.addWidget(self.selected_app_card)
+
+        self.app_input = QLineEdit(p)
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
         )
         self.app_input.setClearButtonEnabled(True)
-        app_g.add(self.app_input)
+        # Keep the existing download/version handlers without a duplicate ID field.
+        self.app_input.setVisible(False)
 
         self.try_purchase_check = QCheckBox(
             "Попробовать оформить лицензию в текущем регионе"
@@ -668,10 +765,12 @@ class MainWindow(QMainWindow):
         check_lay = QHBoxLayout(check_wrap)
         check_lay.setContentsMargins(16, 8, 16, 8)
         check_lay.addWidget(self.try_purchase_check)
-        app_g.add(check_wrap)
 
-        r_dl = Row("Загрузка", "Скачать IPA из вашей библиотеки")
-        self.download_button = AppleButton("Скачать IPA…")
+        r_dl = Row("Скачать IPA", "Выберите приложение и при необходимости его версию")
+        self.download_button = AppleButton("Скачать IPA…", "filled")
+        self.download_button.setEnabled(False)
+        self.download_button.setToolTip("Сначала выберите приложение")
+        self._selected_restore_app = False
         self.download_button.clicked.connect(self._on_download)
         r_dl.add_tail(self.download_button)
         app_g.add(r_dl)
@@ -683,9 +782,8 @@ class MainWindow(QMainWindow):
         self.history_button.clicked.connect(self._on_open_history)
         r_pick.add_tail(self.pickup_button)
         r_pick.add_tail(self.history_button)
-        app_g.add(r_pick)
 
-        r_ver = Row("Версии и каталог", "list-versions и локальный список Store ID")
+        r_ver = Row("История версий", "Версии выбранного приложения")
         self.versions_button = AppleButton("Версии…", "plain")
         self.versions_button.clicked.connect(self._on_list_versions)
         self.pickup_versions_button = AppleButton("Подхватить", "plain")
@@ -694,9 +792,64 @@ class MainWindow(QMainWindow):
         self.catalog_button.clicked.connect(self._on_open_catalog)
         r_ver.add_tail(self.versions_button)
         r_ver.add_tail(self.pickup_versions_button)
-        r_ver.add_tail(self.catalog_button)
-        app_g.add(r_ver)
+        # Общий каталог оставлен в коде для совместимости, но скрыт из основного сценария.
+        self.advanced_restore_options = QWidget(p)
+        advanced_layout = QVBoxLayout(self.advanced_restore_options)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.addWidget(check_wrap)
+        advanced_layout.addWidget(r_pick)
+        advanced_layout.addWidget(r_ver)
+        # Advanced actions are accessible but no longer dominate the page.
+        self.advanced_restore_options.setVisible(False)
+        self.advanced_restore_toggle = QPushButton("Дополнительные действия ▾", p)
+        self.advanced_restore_toggle.setObjectName("advancedRestoreToggle")
+        self.advanced_restore_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.advanced_restore_toggle.setMinimumHeight(48)
+        self.advanced_restore_toggle.setStyleSheet("""
+            QPushButton#advancedRestoreToggle {
+                text-align: left;
+                padding: 11px 18px;
+                background: #FFFFFF;
+                color: #23465A;
+                font-size: 13px;
+                font-weight: 600;
+                border: 1px solid #D9E3EC;
+                border-radius: 14px;
+            }
+            QPushButton#advancedRestoreToggle:hover {
+                background: #F1F7FA;
+                border-color: #B6D2DE;
+            }
+            QPushButton#advancedRestoreToggle:checked {
+                background: #EFF6F9;
+                border-color: #B6D2DE;
+            }
+        """)
+        self.advanced_restore_options.setStyleSheet("""
+            QWidget { background: transparent; }
+            QCheckBox { color: #25465A; padding: 9px 5px; }
+            QPushButton {
+                color: #087F91;
+                background: #FFFFFF;
+                border: 1px solid #D9E3EC;
+                border-radius: 11px;
+                padding: 9px 13px;
+            }
+            QPushButton:hover { background: #EFF7FA; }
+        """)
+        self.advanced_restore_toggle.setCheckable(True)
+        self.advanced_restore_toggle.toggled.connect(
+            self.advanced_restore_options.setVisible
+        )
+        self.advanced_restore_toggle.toggled.connect(
+            lambda expanded: self.advanced_restore_toggle.setText(
+                "Скрыть дополнительные действия ▴"
+                if expanded else "Дополнительные действия ▾"
+            )
+        )
         p.lay.addWidget(app_g)
+        p.lay.addWidget(self.advanced_restore_toggle)
+        p.lay.addWidget(self.advanced_restore_options)
 
         self.download_status_panel = QFrame()
         self.download_status_panel.setObjectName("downloadStatusPanel")
@@ -877,6 +1030,10 @@ class MainWindow(QMainWindow):
             self.row_device.dot.set_state("on" if found else "off")
         self.chip_device.set_state(found, label)
         self._refresh_device_actions()
+        self.home_device.set_sub(
+            (f"{label} · " + ("доверие подтверждено" if self._trust_ok else "требуется доверие"))
+            if found else "Устройство не найдено · нажмите «Найти устройство»"
+        )
         if "A" in self.tiles:
             self.tiles["A"].set_done(found and self._trust_ok)
         if found and self._trust_ok:
@@ -898,6 +1055,10 @@ class MainWindow(QMainWindow):
         if self.row_session.dot is not None:
             self.row_session.dot.set_state("on" if ok else "off")
         self.chip_session.set_state(ok, label)
+        self.home_session.set_sub(
+            (label + " · наличие сессии не гарантирует действительный вход")
+            if ok else "Сессия не обнаружена · войдите в Apple ID"
+        )
         self._refresh_passphrase_label()
         self._refresh_session_actions()
         if "B" in self.tiles:
@@ -916,7 +1077,8 @@ class MainWindow(QMainWindow):
                 "Без прохождения знакомства и условий download/install недоступны.\n"
                 "Откройте «Справка» или «Обучение».",
             )
-        self._maybe_prompt_dependencies()
+        # Dependency setup is optional at startup; device diagnostics remain
+        # available on demand via System Doctor / preparation dialog.
         self._refresh_passphrase_label()
         if self._appstore.session_files_present() and kc_pass.has_stored_passphrase():
             worker = AuthInfoWorker(self._appstore)
@@ -1612,6 +1774,14 @@ class MainWindow(QMainWindow):
             account_storefront=self._account_storefront,
         )
 
+    def _on_system_doctor(self) -> None:
+        service = SystemHealthService(
+            packages_dir=self._packages_dir,
+            device_adapter=self._device_adapter,
+            session_present=self._appstore.session_files_present(),
+        )
+        show_system_doctor(self, service)
+
     def _on_open_history(self) -> None:
         entries = self._history.list_entries()
         if not entries:
@@ -1710,6 +1880,59 @@ class MainWindow(QMainWindow):
 
         table.itemSelectionChanged.connect(_on_sel)
 
+        # Catalog/known entries may not contain artwork. Resolve it only by
+        # exact Store ID; never use fuzzy name-based image matching.
+        lookup_manager = QNetworkAccessManager(dialog)
+        for app in results:
+            if app.artwork_url or not app.store_id or not app.store_id.isdigit():
+                continue
+            lookup_url = QUrl(
+                f"https://itunes.apple.com/lookup?id={app.store_id}&country={region_code}"
+            )
+            lookup_reply = lookup_manager.get(QNetworkRequest(lookup_url))
+
+            def lookup_finished(reply=lookup_reply, expected_id=app.store_id) -> None:
+                try:
+                    if reply.error() != reply.NetworkError.NoError:
+                        return
+                    payload = bytes(reply.readAll())
+                    if len(payload) > 500_000:
+                        return
+                    data = json.loads(payload.decode("utf-8"))
+                    entries = data.get("results", [])
+                    match = next(
+                        (item for item in entries
+                         if isinstance(item, dict)
+                         and str(item.get("trackId", "")) == expected_id),
+                        None,
+                    )
+                    if match is None:
+                        return
+                    url = match.get("artworkUrl512") or match.get("artworkUrl100")
+                    if not isinstance(url, str) or not url.startswith("https://"):
+                        return
+                    # The result model is immutable. Register the URL against
+                    # the exact matching result rows for the artwork callback.
+                    for idx, result in enumerate(results):
+                        if result.store_id == expected_id:
+                            catalog_artwork_urls[idx] = url
+                    request_artwork_url(url)
+                except (ValueError, TypeError, UnicodeError):
+                    return
+                finally:
+                    reply.deleteLater()
+
+            lookup_reply.finished.connect(lookup_finished)
+
+        # Preload artwork for every visible result, not only the selected row.
+        # This keeps icons associated with their own App Store metadata.
+        for app in results:
+            if app.artwork_url and app.artwork_url.startswith("https://"):
+                request_artwork(app)
+        table.clearSelection()
+        artwork_label.clear()
+        artwork_label.setText("Выберите приложение")
+
         def on_use() -> None:
             app = _selected_app()
             if app is None:
@@ -1749,6 +1972,40 @@ class MainWindow(QMainWindow):
         elif bundle_id and bundle_id not in {"", "—"}:
             self.app_input.setText(bundle_id)
 
+    def _update_selected_app_card(
+        self,
+        app: AppSearchResult,
+        license_result: LicenseCheckResult,
+        pixmap: QPixmap | None = None,
+    ) -> None:
+        self._selected_restore_app = True
+        self.download_button.setEnabled(not self._busy)
+        self.download_button.setToolTip("Попробовать скачать выбранное приложение")
+        self.selected_app_title.setText(app.display_name or "Приложение")
+        self.selected_app_meta.setText(
+            f"{app.seller_name or 'Разработчик не указан'} · "
+            f"Store ID: {app.store_id or '—'} · "
+            f"Bundle ID: {app.bundle_id or '—'}"
+        )
+        labels = {
+            "licensed": "Найдено в архиве покупок Apple ID",
+            "not_found": "Не найдено в архиве покупок — лицензия не подтверждена",
+            "region_mismatch": "Возможное несовпадение региона Apple ID",
+            "unknown": "Лицензия не проверена: загрузите архив покупок",
+        }
+        self.selected_app_license.setText(
+            labels.get(license_result.status, "Статус лицензии неизвестен")
+        )
+        self.selected_app_icon.clear()
+        if pixmap is not None and not pixmap.isNull():
+            self.selected_app_icon.setPixmap(pixmap.scaled(
+                72, 72,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        else:
+            self.selected_app_icon.setText("APP")
+
     def _on_regional_search_app(self) -> None:
         if self._busy:
             return
@@ -1768,10 +2025,12 @@ class MainWindow(QMainWindow):
 
     def _select_region(self, code: str) -> None:
         self._region_code = code
-        for tag_code, tag in self._region_tags.items():
-            selected = tag_code == code
-            tag.setProperty("state", "ok" if selected else "idle")
-            repolish(tag)
+        if hasattr(self, "region_selector"):
+            idx = self.region_selector.findData(code)
+            if idx >= 0 and idx != self.region_selector.currentIndex():
+                self.region_selector.blockSignals(True)
+                self.region_selector.setCurrentIndex(idx)
+                self.region_selector.blockSignals(False)
 
     def _on_regional_search_results(self, results: object) -> None:
         assert isinstance(results, list)
@@ -1786,8 +2045,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Восстановление начинается с конкретного приложения: не показываем сотни
+        # нерелевантных записей. Сохраняем наиболее релевантные совпадения.
+        results = results[:8]
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Поиск ID ({region_code}) — {len(results)}")
+        dialog.setWindowTitle(f"Выберите приложение ({region_code}) — {len(results)}")
         dialog.resize(1080, 680)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         dialog.setStyleSheet(_dialog_qss(self._mode))
@@ -1796,18 +2058,37 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(dialog)
         hint = QLabel(
-            f"Каталог + iTunes ({region_code}). "
-            "Сверху — наиболее похожие по названию. "
-            "Полное имя выбранного — в карточке ниже."
+            f"Найденные совпадения в регионе {region_code}. "
+            "Выберите конкретное приложение и проверьте лицензию перед скачиванием. "
+            "Отсутствие в архиве покупок не всегда означает отсутствие лицензии."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        table = QTableWidget(len(results), 7, dialog)
+        category_filter = QComboBox(dialog)
+        category_filter.addItem("Все категории")
+        categories = sorted({
+            app.category.strip()
+            for app in results
+            if app.category and app.category.strip()
+        })
+        category_filter.addItems(categories)
+        category_filter.setToolTip(
+            "Фильтр по категориям, полученным из App Store. "
+            "У записей каталога категория может отсутствовать."
+        )
+        layout.addWidget(category_filter)
+
+        table = QTableWidget(len(results), 8, dialog)
+        table.setIconSize(QPixmap(40, 40).size())
+        table.verticalHeader().setDefaultSectionSize(52)
         table.setPalette(pal)
         table.setAutoFillBackground(True)
         table.setHorizontalHeaderLabels(
-            ["Название", "Store ID", "Источник", "Bundle ID", "Версия", "Цена", "Seller"]
+            [
+                "Название", "Store ID", "Источник", "Bundle ID",
+                "Версия", "Цена", "Категория", "Seller",
+            ]
         )
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -1823,12 +2104,93 @@ class MainWindow(QMainWindow):
                     app.bundle_id or "",
                     app.version or "",
                     app.price or "",
+                    app.category or "",
                     app.seller_name or "",
                 ),
                 data_index=row_idx,
             )
         _tune_data_table(table, name_col=0, hide_empty_columns=True, wrap=False)
+
+        def apply_category_filter(text: str) -> None:
+            for row in range(table.rowCount()):
+                category_item = table.item(row, 6)
+                category = category_item.text() if category_item else ""
+                table.setRowHidden(
+                    row, text != "Все категории" and category != text
+                )
+            if text != "Все категории":
+                for row in range(table.rowCount()):
+                    if not table.isRowHidden(row):
+                        table.selectRow(row)
+                        break
+                else:
+                    table.clearSelection()
+
+        category_filter.currentTextChanged.connect(apply_category_filter)
         layout.addWidget(table)
+
+        artwork_label = QLabel("Иконка загружается…", dialog)
+        artwork_label.setFixedHeight(72)
+        layout.addWidget(artwork_label)
+        artwork_manager = QNetworkAccessManager(dialog)
+        artwork_cache: dict[str, QPixmap] = {}
+        artwork_requested: set[str] = set()
+        catalog_artwork_urls: dict[int, str] = {}
+
+        def request_artwork_url(url: str) -> None:
+            if not url.startswith("https://"):
+                return
+            if url in artwork_cache:
+                artwork_label.setPixmap(artwork_cache[url])
+                return
+            artwork_label.setText("Иконка загружается…")
+            if url in artwork_requested:
+                return
+            artwork_requested.add(url)
+            reply = artwork_manager.get(QNetworkRequest(QUrl(url)))
+
+            def finished() -> None:
+                try:
+                    if reply.error() != reply.NetworkError.NoError:
+                        return
+                    raw = bytes(reply.readAll())
+                    if len(raw) > 2_000_000:
+                        return
+                    pixmap = QPixmap()
+                    if not pixmap.loadFromData(raw):
+                        return
+                    artwork_cache[url] = pixmap.scaled(
+                        64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    # Sorting can move rows: resolve the original result index
+                    # from the row's stored user data instead of using idx.
+                    for row in range(table.rowCount()):
+                        item = table.item(row, 0)
+                        if item is None:
+                            continue
+                        data_idx = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(data_idx, int) and 0 <= data_idx < len(results):
+                            if (results[data_idx].artwork_url == url
+                                    or catalog_artwork_urls.get(data_idx) == url):
+                                item.setIcon(QIcon(artwork_cache[url]))
+                    selected_idx = _selected_data_index(table)
+                    if isinstance(selected_idx, int) and (
+                        results[selected_idx].artwork_url == url
+                        or catalog_artwork_urls.get(selected_idx) == url
+                    ):
+                        artwork_label.setPixmap(artwork_cache[url])
+                finally:
+                    reply.deleteLater()
+
+            reply.finished.connect(finished)
+
+        def request_artwork(app: AppSearchResult) -> None:
+            url = app.artwork_url
+            if not url:
+                artwork_label.setText("Иконка недоступна")
+                return
+            request_artwork_url(url)
 
         card_text = _make_selection_detail(dialog)
         card_text.setText("Выберите строку — карточка приложения.")
@@ -1854,7 +2216,12 @@ class MainWindow(QMainWindow):
 
         def _selected(*, quiet: bool = False) -> AppSearchResult | None:
             data_idx = _selected_data_index(table)
-            if data_idx is None or not (0 <= data_idx < len(results)):
+            if (
+                data_idx is None
+                or not (0 <= data_idx < len(results))
+                or table.currentRow() < 0
+                or table.isRowHidden(table.currentRow())
+            ):
                 if not quiet:
                     QMessageBox.information(
                         dialog, "Выбор", "Выберите приложение в списке."
@@ -1872,7 +2239,9 @@ class MainWindow(QMainWindow):
                 f"Bundle: {app.bundle_id or '—'}\n"
                 f"Источник: {app.source or '—'} · "
                 f"Seller: {app.seller_name or '—'} · "
-                f"Версия: {app.version or '—'}"
+                f"Версия: {app.version or '—'} · "
+                f"Категория: {app.category or 'не указана'} · "
+                f"Цена: {app.price or 'неизвестна'}"
             )
             status_map = {
                 "licensed": "Лицензия: похоже, есть",
@@ -1897,6 +2266,12 @@ class MainWindow(QMainWindow):
                 account_storefront=self._account_storefront,
             )
             _apply_card(app, lic)
+            idx = _selected_data_index(table)
+            fallback_url = catalog_artwork_urls.get(idx) if isinstance(idx, int) else None
+            if fallback_url:
+                request_artwork_url(fallback_url)
+            else:
+                request_artwork(app)
 
         table.itemSelectionChanged.connect(_on_sel)
 
@@ -1912,6 +2287,9 @@ class MainWindow(QMainWindow):
                 app,
                 purchases=self._load_purchases_cache(),
                 account_storefront=self._account_storefront,
+            )
+            self._update_selected_app_card(
+                app, lic, artwork_cache.get(app.artwork_url or "")
             )
             self.output.setPlainText(
                 f"ID из региона {region_code}: {app.display_name or '—'}\n"
@@ -1929,6 +2307,14 @@ class MainWindow(QMainWindow):
             self._apply_app_reference(app.store_id, app.bundle_id)
             self._last_display_name = app.display_name
             self.try_purchase_check.setChecked(try_purchase.isChecked())
+            lic = self._license_check.check_search_result(
+                app,
+                purchases=self._load_purchases_cache(),
+                account_storefront=self._account_storefront,
+            )
+            self._update_selected_app_card(
+                app, lic, artwork_cache.get(app.artwork_url or "")
+            )
             self.search_input.clear()
             dialog.accept()
             ref = (
@@ -1946,6 +2332,7 @@ class MainWindow(QMainWindow):
         dl_btn.clicked.connect(on_download)
         buttons.rejected.connect(dialog.reject)
         if results:
+            table.setCurrentCell(0, 0)
             table.selectRow(0)
             _on_sel()
         dialog.exec()
@@ -1969,44 +2356,57 @@ class MainWindow(QMainWindow):
             return
         try_purchase = self.try_purchase_check.isChecked()
         target = app.display_name or app.bundle_id or app.store_id or "?"
-        version_line = (
-            f"версия (external-version-id): {external_version_id}\n"
-            if external_version_id
-            else "версия: latest\n"
-        )
-        headless = kc_pass.has_stored_passphrase()
-        mode_line = (
-            "Режим: фоновая загрузка с ретраями (сохранённый passphrase).\n"
-            if headless
-            else "Режим: консоль ipatool (введите passphrase вручную).\n"
-        )
         license_result = self._check_license_for_app(
             store_id=app.store_id,
             bundle_id=app.bundle_id,
             app_region=app_region,
         )
-        license_line = f"Лицензия: {license_result.message}\n"
-        msg = (
-            "Начать download IPA?\n"
-            f"{target}\n"
-            f"ID: {app.store_id or app.bundle_id}\n"
-            f"{version_line}"
-            f"{mode_line}"
-            f"{license_line}"
-            f"Каталог: {self._packages_dir}\n"
-            f"--purchase: {'да (текущий storefront)' if try_purchase else 'нет'}\n"
-        )
-        if license_result.status == "not_found" and not try_purchase:
-            msg += "\nВ архиве покупок ID не найден — загрузка, скорее всего, упадёт."
-        if license_result.status == "region_mismatch":
-            msg += "\nРегион витрины не совпадает — высокий риск отказа."
         if confirm:
-            answer = QMessageBox.question(self, "Загрузка", msg)
-            if answer != QMessageBox.StandardButton.Yes:
+            version_text = (
+                f"Историческая версия: {external_version_id}"
+                if external_version_id else "Версия: последняя доступная"
+            )
+            message = version_text
+            if license_result.status == "not_found":
+                message += (
+                    "\n\nПриложение не найдено в архиве покупок Apple ID. "
+                    "Это не доказывает отсутствие лицензии, но скачивание "
+                    "может завершиться ошибкой."
+                )
+            elif license_result.status == "region_mismatch":
+                message += (
+                    "\n\nРегион приложения отличается от региона Apple ID. "
+                    "Скачивание может быть недоступно."
+                )
+            elif license_result.status == "unknown":
+                message += (
+                    "\n\nЛицензия пока не подтверждена. "
+                    "Возможность скачивания выяснится при попытке."
+                )
+            if try_purchase:
+                message += (
+                    "\n\nВключена попытка оформления лицензии "
+                    "в текущем регионе Apple ID."
+                )
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Question)
+            dialog.setWindowTitle("Скачивание приложения")
+            dialog.setText(f"Скачать {target}?")
+            dialog.setInformativeText(message)
+            download_choice = dialog.addButton(
+                "Попробовать скачать",
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton() is not download_choice:
                 return
         if app.display_name:
             self._last_display_name = app.display_name
         before_mtimes = self._appstore.list_ipa_mtimes(self._packages_dir)
+        # Match the adapter's choice: saved passphrase -> background download,
+        # otherwise ipatool opens an interactive console.
+        headless = bool(kc_pass.load_passphrase())
         try:
             self._appstore.begin_interactive_download(
                 app,
@@ -2481,38 +2881,45 @@ class MainWindow(QMainWindow):
         device = self._devices[0]
         pkg = self._package
         meets = device_meets_minimum(device.os_version, pkg.minimum_os_version)
-        min_line = f"min iOS IPA: {pkg.minimum_os_version or 'неизвестно'}\n"
         if meets is False:
-            answer = QMessageBox.warning(
-                self,
-                "iOS слишком старая",
-                "Устройство, похоже, не тянет минимальную iOS этого IPA.\n\n"
-                f"Устройство: iOS {device.os_version or '?'}\n"
-                f"IPA требует: {pkg.minimum_os_version}\n\n"
-                "Всё равно попытаться установить?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+            warning = QMessageBox(self)
+            warning.setIcon(QMessageBox.Icon.Warning)
+            warning.setWindowTitle("Проверка совместимости")
+            warning.setText("Версия приложения может быть несовместима с iPad")
+            warning.setInformativeText(
+                f"На устройстве: iPadOS {device.os_version or 'неизвестно'}\n"
+                f"Приложению требуется: iOS {pkg.minimum_os_version or 'неизвестно'}\n\n"
+                "Установка может завершиться ошибкой."
             )
-            if answer != QMessageBox.StandardButton.Yes:
+            proceed = warning.addButton(
+                "Всё равно попробовать", QMessageBox.ButtonRole.AcceptRole
+            )
+            warning.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+            warning.exec()
+            if warning.clickedButton() is not proceed:
                 return
-        elif meets is True:
-            min_line += f"Проверка min iOS: OK (устройство {device.os_version})\n"
-        else:
-            min_line += "Проверка min iOS: не удалось сравнить версии\n"
-        answer = QMessageBox.question(
-            self,
-            "Подтверждение установки",
-            "Установить пакет на устройство?\n\n"
-            f"Устройство: {device.display_name} ({device.device_id})\n"
-            f"iOS: {device.os_version or '?'}\n"
-            f"{min_line}"
-            f"Пакет: {pkg.local_path}\n"
-            f"Размер: {pkg.size_bytes} байт\n"
-            f"bundle_id: {pkg.bundle_id or 'неизвестно'}\n"
-            f"version: {pkg.version or 'неизвестно'}\n\n"
-            "Операция может изменить существующую установку.",
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowTitle("Установка приложения")
+        dialog.setText(f"Установить {pkg.bundle_id or pkg.local_path.stem}?")
+        compatibility = (
+            "Совместимость с iPadOS подтверждена"
+            if meets is True else "Совместимость не удалось проверить"
+            if meets is None else "Возможна несовместимость с iPadOS"
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        dialog.setInformativeText(
+            f"Устройство: {device.display_name}\n"
+            f"Версия приложения: {pkg.version or 'неизвестна'}\n"
+            f"{compatibility}\n\n"
+            "Если приложение уже установлено, его текущая версия может быть заменена."
+        )
+        install_choice = dialog.addButton(
+            "Установить", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is not install_choice:
             return
         self._set_busy(True, "Установка через ideviceinstaller…")
         worker = InstallAppWorker(self._installer, pkg, device)
@@ -2530,6 +2937,10 @@ class MainWindow(QMainWindow):
         assert isinstance(devices, list)
         self._devices = devices
         if not devices:
+            self.device_details.set_sub("Устройство не найдено")
+            self.device_guidance.set_sub(
+                "Проверьте кабель, разблокировку экрана и доверие к компьютеру."
+            )
             self.set_device_chip(False)
             self.output.setPlainText("Устройства не найдены.")
         else:
@@ -2543,6 +2954,15 @@ class MainWindow(QMainWindow):
                     f"iOS={device.os_version or '?'} | {avail}"
                 )
             first = devices[0]
+            self.device_details.set_sub(
+                f"{first.display_name} · iOS {first.os_version or 'неизвестна'}"
+                + (f" · всего устройств: {len(devices)}" if len(devices) > 1 else "")
+            )
+            self.device_guidance.set_sub(
+                "Устройство готово к операциям."
+                if first.available_for_operations
+                else "Подтвердите «Доверять» на устройстве, затем установите доверие."
+            )
             self.set_device_chip(
                 True,
                 first.display_name,
@@ -2554,6 +2974,10 @@ class MainWindow(QMainWindow):
     def _on_paired(self, device: object) -> None:
         assert isinstance(device, DeviceInfo)
         self._devices = [device]
+        self.device_details.set_sub(
+            f"{device.display_name} · iOS {device.os_version or 'неизвестна'}"
+        )
+        self.device_guidance.set_sub("Доверие к компьютеру подтверждено.")
         self.set_device_chip(
             True,
             device.display_name,
@@ -2568,6 +2992,7 @@ class MainWindow(QMainWindow):
 
     def _on_download_done(self, package: PackageInfo) -> None:
         self._package = package
+        self.home_package.set_sub(f"Готов: {Path(package.local_path).name}")
         self.install_button.setEnabled(True)
         self.card_app.set_state("done", "IPA готов")
         if "C" in self.tiles:
@@ -2586,6 +3011,7 @@ class MainWindow(QMainWindow):
             display_name=display,
             version=package.version,
         )
+        self._refresh_home_recent()
         self._set_download_progress_ui(
             phase="ok",
             percent=100,
@@ -2622,6 +3048,7 @@ class MainWindow(QMainWindow):
                 display_name=app_name,
                 version=pkg.version,
             )
+            self._refresh_home_recent()
         self._set_busy(False)
         if "D" in self.tiles:
             self.tiles["D"].set_done(True)
@@ -2711,16 +3138,19 @@ class MainWindow(QMainWindow):
             self.archive_button,
             self.pickup_archive_button,
             self.regional_search_button,
-            *self._region_tags.values(),
+            self.region_selector,
             self.diag_button,
             self.help_button,
             self.release_notes_button,
             self.open_setup_button,
+            self.doctor_button,
             self.replay_onboarding_button,
             self.shortcut_button,
             self.theme_toggle,
         ):
-            if btn is self.install_button:
+            if btn is self.download_button:
+                btn.setEnabled((not busy) and self._selected_restore_app)
+            elif btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)
             elif btn in (
                 self.archive_button,

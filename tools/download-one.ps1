@@ -84,6 +84,20 @@ function Test-Retryable([string]$text) {
     return $false
 }
 
+function Get-PermanentFailure([string]$text) {
+    $low = (Strip-Ansi $text).ToLowerInvariant()
+    if ($low -match 'license' -and $low -match 'not found|no license|does not have|not owned|not purchased|missing') {
+        return 'Нет лицензии на приложение для текущего Apple ID.'
+    }
+    if ($low -match 'not available in (your |this )?(country|region|storefront)|not available in the (app )?store|country or region') {
+        return 'Приложение недоступно в текущем регионе App Store.'
+    }
+    if ($low -match 'authentication failed|invalid credentials|session expired|not authenticated|unauthorized|401 unauthorized') {
+        return 'Не удалось подтвердить авторизацию Apple ID.'
+    }
+    return ''
+}
+
 function Test-SuccessText([string]$text) {
     $plain = Strip-Ansi $text
     if ($plain -match 'success[=:]?\s*false') { return $false }
@@ -243,6 +257,10 @@ while ($attempt -lt $MaxAttempts) {
     Write-Host (Strip-Ansi $lastOut)
 
     $ipa = Get-NewestIpa $OutDir $before
+    # Never attribute another application's IPA to this download.
+    if ($ipa -and $AppId -and $ipa.Name -notlike "${AppId}_*.ipa") {
+        $ipa = $null
+    }
     if ($ipa -and -not (Test-FreshIpa $ipa $snapshot)) {
         Write-Host ("Ignoring pre-existing IPA (not rewritten): {0}" -f $ipa.Name)
         $ipa = $null
@@ -284,6 +302,15 @@ while ($attempt -lt $MaxAttempts) {
         Write-Result -Ok $true -ErrorText '' -IpaPath $path -Reused (-not $fresh) -DurationSec $duration -Fresh $fresh
         Write-Host ("DONE success attempt={0} ipa={1} fresh={2} duration={3}s" -f $attempt, $path, $fresh, $duration)
         exit 0
+    }
+
+    # Permanent Apple responses win over incidental network errors in the same log.
+    $permanentFailure = Get-PermanentFailure $lastOut
+    if ($permanentFailure) {
+        Write-Host ("Permanent failure: {0}" -f $permanentFailure)
+        Write-DlProgress -Phase 'failed' -Attempt $attempt -ExpectedBytes $expected -Message $permanentFailure
+        Write-Result -Ok $false -ErrorText $permanentFailure -IpaPath '' -DurationSec $duration -Fresh $false
+        exit 1
     }
 
     if (Test-Retryable $lastOut) {

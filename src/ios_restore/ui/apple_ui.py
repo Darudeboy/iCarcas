@@ -46,14 +46,21 @@ class _ParentRevealMixin:
 
 # --------------------------------------------------------------------------- тема
 PALETTES = {
-    "light": dict(bg="#F2F2F7", side="#E9E9EE", group="#FFFFFF", sep="#E5E5EA",
-                  text="#1C1C1E", sub="#8E8E93", blue="#007AFF", blue_soft="#E5F1FF",
-                  green="#34C759", red="#FF3B30", orange="#FF9500", purple="#AF52DE",
-                  gray="#8E8E93", log="#FAFAFC"),
-    "dark": dict(bg="#1C1C1E", side="#151517", group="#2C2C2E", sep="#3A3A3C",
-                 text="#F5F5F7", sub="#98989F", blue="#0A84FF", blue_soft="#0A2A4A",
-                 green="#30D158", red="#FF453A", orange="#FF9F0A", purple="#BF5AF2",
-                 gray="#8E8E93", log="#141416"),
+    # Calm teal / slate surfaces; both palettes keep strong text contrast.
+    "light": dict(
+        bg="#F3F7FA", side="#E7EFF3", group="#FFFFFF", sep="#DCE7EC",
+        text="#152A36", sub="#607787", blue="#087F8C", blue_soft="#D4EFF0",
+        green="#159C75", red="#D94A56", orange="#E99A23",
+        purple="#7966C8", gray="#6C8291", log="#F8FBFC",
+        card_border="#DFE9EE", active="#D7ECF0", accent_ink="#FFFFFF",
+    ),
+    "dark": dict(
+        bg="#101A22", side="#13232D", group="#1A2B35", sep="#2B414C",
+        text="#ECF5F7", sub="#A7BBC5", blue="#45C6C5", blue_soft="#20454C",
+        green="#45D0A0", red="#FF8589", orange="#F5B54E",
+        purple="#AF9AEF", gray="#9AACB5", log="#0C161C",
+        card_border="#314853", active="#244A51", accent_ink="#09262D",
+    ),
 }
 P: dict[str, QColor] = {}
 _hex: dict[str, str] = {}
@@ -72,41 +79,59 @@ _QSS = Template("""
 * { color: $text; font-size: 13px; }
 QMainWindow, QWidget#root, QWidget#content { background: $bg; }
 QWidget#sidebar { background: $side; border-right: 1px solid $sep; }
-QFrame#group { background: $group; border-radius: 12px; }
+QFrame#group {
+    background: $group; border: 1px solid $card_border;
+    border-radius: 17px;
+}
 QLabel { background: transparent; }
-QLabel#large { font-size: 28px; font-weight: 700; }
-QLabel#brand { font-size: 22px; font-weight: 700; }
+QLabel#large { font-size: 31px; font-weight: 700; }
+QLabel#brand { font-size: 24px; font-weight: 700; }
+QLabel#sectionEyebrow { color: $sub; font-size: 11px; font-weight: 700; }
 QLabel#sub, QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { color: $sub; }
 QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { font-size: 12px; }
 QLabel#themeLabel { color: $text; font-size: 13px; font-weight: 600; }
-QLabel#rowTitle { font-size: 14px; font-weight: 500; }
+QLabel#rowTitle { font-size: 14px; font-weight: 600; }
 QLabel#downloadStateTitle { font-size: 14px; font-weight: 600; }
 QLabel#downloadStateDetail, QLabel#downloadProgressLabel { color: $sub; font-size: 12px; }
-QFrame#downloadStatusPanel { background: $group; border-radius: 12px; }
-QLineEdit { background: $group; border: 1px solid $sep; border-radius: 12px;
-            padding: 12px 14px; font-size: 14px;
-            selection-background-color: $blue; selection-color: white; }
-QCheckBox { spacing: 8px; color: $text; }
-QCheckBox::indicator { width: 18px; height: 18px; border-radius: 4px;
-    border: 1px solid $sep; background: $group; }
-QCheckBox::indicator:checked { background: $blue; border-color: $blue; }
-QProgressBar { background: $sep; border: none; border-radius: 4px; height: 8px; text-align: center; }
-QProgressBar::chunk { background: $blue; border-radius: 4px; }
-QPlainTextEdit#log { background: $log; border: none; border-radius: 12px; padding: 14px;
-    font-family: "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-size: 12px; color: $sub; }
-QPushButton#regionTag {
-    background: $group; color: $text; border: 1px solid $sep; border-radius: 10px;
-    padding: 8px 10px; font-size: 12px; font-weight: 500;
+QFrame#downloadStatusPanel {
+    background: $group; border: 1px solid $card_border; border-radius: 16px;
 }
+QLineEdit {
+    background: $group; border: 1px solid $sep; border-radius: 11px;
+    padding: 12px 14px; font-size: 14px;
+    selection-background-color: $blue; selection-color: $accent_ink;
+}
+QLineEdit:hover { border-color: $blue; }
+QLineEdit:focus { border: 2px solid $blue; padding: 11px 13px; }
+QCheckBox { spacing: 8px; color: $text; }
+QCheckBox::indicator {
+    width: 18px; height: 18px; border-radius: 5px;
+    border: 1px solid $sep; background: $group;
+}
+QCheckBox::indicator:checked { background: $blue; border-color: $blue; }
+QProgressBar { background: $sep; border: none; border-radius: 5px; height: 9px; text-align: center; }
+QProgressBar::chunk { background: $blue; border-radius: 5px; }
+QPlainTextEdit#log {
+    background: $log; border: 1px solid $card_border; border-radius: 14px; padding: 14px;
+    font-family: "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: $sub;
+}
+QPushButton#regionTag {
+    background: $group; color: $text; border: 1px solid $sep;
+    border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 500;
+}
+QPushButton#regionTag:hover { border-color: $blue; }
 QPushButton#regionTag[state="ok"] {
-    background: $blue_soft; color: $blue; border-color: $blue;
-    font-weight: 600;
+    background: $blue_soft; color: $blue; border-color: $blue; font-weight: 700;
 }
 QScrollArea { border: none; background: transparent; }
-QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: $sep; border-radius: 3px; min-height: 28px; }
+QScrollBar:vertical { background: transparent; width: 9px; margin: 2px; }
+QScrollBar::handle:vertical { background: $sep; border-radius: 4px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QToolTip { background: $group; color: $text; border: 1px solid $sep; padding: 6px 8px; }
+QToolTip {
+    background: $group; color: $text;
+    border: 1px solid $sep; padding: 8px 10px;
+}
 """)
 
 
@@ -217,7 +242,7 @@ class AppleButton(HoverButton):
 
     def _colors(self):
         h, k = self._h, self.kind
-        if k == "filled": return QColor(P["blue"]).lighter(100 + int(10 * h)), QColor("white")
+        if k == "filled": return QColor(P["blue"]).lighter(100 + int(10 * h)), P["accent_ink"]
         if k == "danger": return mix(P["red"], .12 + .10 * h), P["red"]
         if k == "plain":  return mix(P["sub"], .16 * h), P["blue"]
         return mix(P["blue"], .13 + .10 * h), P["blue"]
@@ -358,20 +383,26 @@ class NavItem(HoverButton):
     def __init__(self, text, glyph, color, parent=None):
         super().__init__(text, parent)
         self.glyph, self.color = glyph, color
-        self.setCheckable(True); self.setFixedHeight(40)
+        self.setCheckable(True); self.setFixedHeight(46)
 
     def paintEvent(self, _):
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing); h = self.height()
         if not self.isChecked() and self._h:
             p.setPen(Qt.NoPen); p.setBrush(mix(P["sub"], .13 * self._h))
-            p.drawRoundedRect(QRectF(self.rect()), 9, 9)
-        tile = QRectF(10, (h - 26) / 2, 26, 26)
-        p.setPen(Qt.NoPen); p.setBrush(P[self.color]); p.drawRoundedRect(tile, 7, 7)
+            p.drawRoundedRect(QRectF(self.rect()), 12, 12)
+        tile = QRectF(11, (h - 28) / 2, 28, 28)
+        p.setPen(Qt.NoPen)
+        p.setBrush(P[self.color])
+        p.drawRoundedRect(tile, 9, 9)
+        # Glyphs remain legible across both themes.
+        p.save()
+        p.setOpacity(1.0)
         draw_glyph(p, self.glyph, tile)
+        p.restore()
         f = QFont(self.font()); f.setPixelSize(14)
         f.setWeight(QFont.DemiBold if self.isChecked() else QFont.Medium); p.setFont(f)
         p.setPen(P["text"])
-        p.drawText(QRectF(46, 0, self.width() - 52, h), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        p.drawText(QRectF(51, 0, self.width() - 58, h), Qt.AlignVCenter | Qt.AlignLeft, self.text())
 
 
 class _Pill(QWidget):
@@ -380,7 +411,7 @@ class _Pill(QWidget):
 
     def paintEvent(self, _):
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen); p.setBrush(mix(P["blue"], .16))
+        p.setPen(Qt.NoPen); p.setBrush(P["active"])
         p.drawRoundedRect(QRectF(self.rect()), 9, 9)
 
 
@@ -390,8 +421,8 @@ class Sidebar(_ParentRevealMixin, QWidget):
     def __init__(self, entries, version="", parent=None):
         super().__init__(parent)
         _no_top_flash(self)
-        styled(self, "sidebar"); self.setFixedWidth(232); self._i = 0
-        outer = QVBoxLayout(self); outer.setContentsMargins(14, 24, 14, 16); outer.setSpacing(20)
+        styled(self, "sidebar"); self.setFixedWidth(244); self._i = 0
+        outer = QVBoxLayout(self); outer.setContentsMargins(15, 28, 15, 18); outer.setSpacing(22)
         self.brand = QLabel(self); self.brand.setObjectName("brand"); self.brand.setTextFormat(Qt.RichText)
         self.brand.setContentsMargins(10, 0, 0, 0); outer.addWidget(self.brand)
 
@@ -536,14 +567,14 @@ class Row(_ParentRevealMixin, QWidget):
     def __init__(self, title, sub="", lead: QWidget | None = None, dot=False, parent=None):
         super().__init__(parent)
         _no_top_flash(self)
-        h = QHBoxLayout(self); h.setContentsMargins(16, 12, 14, 12); h.setSpacing(12)
+        h = QHBoxLayout(self); h.setContentsMargins(20, 15, 18, 15); h.setSpacing(14)
         if lead:
             h.addWidget(lead)
             _clear_top_flash(lead)
         self.dot = StatusDot(self) if dot else None
         if self.dot:
             h.addWidget(self.dot)
-        col = QVBoxLayout(); col.setSpacing(1)
+        col = QVBoxLayout(); col.setSpacing(3)
         self.title = QLabel(title, self); self.title.setObjectName("rowTitle")
         self.sub = QLabel(sub, self); self.sub.setObjectName("rowSub"); self.sub.setVisible(bool(sub))
         col.addWidget(self.title); col.addWidget(self.sub); h.addLayout(col, 1)
@@ -562,7 +593,7 @@ class Page(_ParentRevealMixin, QWidget):
     def __init__(self, title, subtitle="", parent=None):
         super().__init__(parent)
         _no_top_flash(self)
-        self.lay = QVBoxLayout(self); self.lay.setContentsMargins(36, 30, 36, 28); self.lay.setSpacing(16)
+        self.lay = QVBoxLayout(self); self.lay.setContentsMargins(38, 38, 38, 32); self.lay.setSpacing(20)
         head = QHBoxLayout(); col = QVBoxLayout(); col.setSpacing(2)
         t = QLabel(title, self); t.setObjectName("large")
         s = QLabel(subtitle, self); s.setObjectName("sub")

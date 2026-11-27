@@ -44,3 +44,18 @@ def test_smart_search_prefers_catalog_and_drops_noise() -> None:
         results[0].source.startswith("catalog")
         or results[0].source.startswith("known")
     )
+
+
+def test_smart_search_reports_api_outage_without_local_matches() -> None:
+    import pytest
+
+    from ios_restore.domain.errors import RestoreError
+
+    svc = SmartAppSearchService(catalog=[])
+
+    def unavailable(term: str, region: str) -> list[AppSearchResult]:
+        raise RuntimeError("network unavailable")
+
+    svc._regional.search_region = unavailable  # type: ignore[method-assign]
+    with pytest.raises(RestoreError, match="App Store"):
+        svc.search("UniqueUnknownApplication887723", "DE")
