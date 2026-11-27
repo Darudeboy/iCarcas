@@ -57,7 +57,7 @@ def show_history_dialog(
         file_name = Path(entry.ipa_path).name if entry.ipa_path else "—"
         for col, text in enumerate((when, kind, name, file_name)):
             item = QTableWidgetItem(text)
-                item.setToolTip(text)
+            item.setToolTip(text)
             if col == 0:
                 item.setData(Qt.ItemDataRole.UserRole, row)
             table.setItem(row, col, item)
