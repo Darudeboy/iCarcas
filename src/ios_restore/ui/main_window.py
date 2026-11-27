@@ -2385,6 +2385,9 @@ class MainWindow(QMainWindow):
         if app.display_name:
             self._last_display_name = app.display_name
         before_mtimes = self._appstore.list_ipa_mtimes(self._packages_dir)
+        # Match the adapter's choice: saved passphrase -> background download,
+        # otherwise ipatool opens an interactive console.
+        headless = bool(kc_pass.load_passphrase())
         try:
             self._appstore.begin_interactive_download(
                 app,
