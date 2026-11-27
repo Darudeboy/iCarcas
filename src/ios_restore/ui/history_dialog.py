@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
+    QComboBox,
     QLabel,
     QMessageBox,
     QTableWidget,
@@ -39,6 +39,10 @@ def show_history_dialog(
         )
     )
 
+    filter_box = QComboBox(dialog)
+    filter_box.addItems(["Все операции", "Скачивания", "Установки"])
+    layout.addWidget(filter_box)
+
     table = QTableWidget(len(entries), 4, dialog)
     table.setHorizontalHeaderLabels(["Когда", "Действие", "Приложение", "Файл"])
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -53,12 +57,21 @@ def show_history_dialog(
         file_name = Path(entry.ipa_path).name if entry.ipa_path else "—"
         for col, text in enumerate((when, kind, name, file_name)):
             item = QTableWidgetItem(text)
-            item.setForeground(QColor("#000000"))
-            item.setToolTip(text)
+                item.setToolTip(text)
             if col == 0:
                 item.setData(Qt.ItemDataRole.UserRole, row)
             table.setItem(row, col, item)
 
+    def apply_filter(index: int) -> None:
+        for row, entry in enumerate(entries):
+            show = index == 0 or (
+                index == 1 and entry.kind == "download"
+            ) or (
+                index == 2 and entry.kind == "install"
+            )
+            table.setRowHidden(row, not show)
+
+    filter_box.currentIndexChanged.connect(apply_filter)
     table.horizontalHeader().setStretchLastSection(True)
     layout.addWidget(table)
 
@@ -68,7 +81,7 @@ def show_history_dialog(
 
     def on_sel() -> None:
         row = table.currentRow()
-        if row < 0 or row >= len(entries):
+        if row < 0 or row >= len(entries) or table.isRowHidden(row):
             return
         e = entries[row]
         detail.setText(
