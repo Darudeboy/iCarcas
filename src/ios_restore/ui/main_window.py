@@ -781,7 +781,10 @@ class MainWindow(QMainWindow):
         app_g.add(check_wrap)
 
         r_dl = Row("Скачать IPA", "Выберите приложение и при необходимости его версию")
-        self.download_button = AppleButton("Скачать IPA…")
+        self.download_button = AppleButton("Скачать IPA…", "filled")
+        self.download_button.setEnabled(False)
+        self.download_button.setToolTip("Сначала выберите приложение")
+        self._selected_restore_app = False
         self.download_button.clicked.connect(self._on_download)
         r_dl.add_tail(self.download_button)
         app_g.add(r_dl)
@@ -1956,6 +1959,9 @@ class MainWindow(QMainWindow):
         license_result: LicenseCheckResult,
         pixmap: QPixmap | None = None,
     ) -> None:
+        self._selected_restore_app = True
+        self.download_button.setEnabled(not self._busy)
+        self.download_button.setToolTip("Попробовать скачать выбранное приложение")
         self.selected_app_title.setText(app.display_name or "Приложение")
         self.selected_app_meta.setText(
             f"{app.seller_name or 'Разработчик не указан'} · "
@@ -3113,7 +3119,9 @@ class MainWindow(QMainWindow):
             self.shortcut_button,
             self.theme_toggle,
         ):
-            if btn is self.install_button:
+            if btn is self.download_button:
+                btn.setEnabled((not busy) and self._selected_restore_app)
+            elif btn is self.install_button:
                 btn.setEnabled((not busy) and self._package is not None)
             elif btn in (
                 self.archive_button,
