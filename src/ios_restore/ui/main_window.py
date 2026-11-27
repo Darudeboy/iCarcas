@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -1824,11 +1825,28 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        table = QTableWidget(len(results), 7, dialog)
+        category_filter = QComboBox(dialog)
+        category_filter.addItem("Все категории")
+        categories = sorted({
+            app.category.strip()
+            for app in results
+            if app.category and app.category.strip()
+        })
+        category_filter.addItems(categories)
+        category_filter.setToolTip(
+            "Фильтр по категориям, полученным из App Store. "
+            "У записей каталога категория может отсутствовать."
+        )
+        layout.addWidget(category_filter)
+
+        table = QTableWidget(len(results), 8, dialog)
         table.setPalette(pal)
         table.setAutoFillBackground(True)
         table.setHorizontalHeaderLabels(
-            ["Название", "Store ID", "Источник", "Bundle ID", "Версия", "Цена", "Seller"]
+            [
+                "Название", "Store ID", "Источник", "Bundle ID",
+                "Версия", "Цена", "Категория", "Seller",
+            ]
         )
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -1844,11 +1862,29 @@ class MainWindow(QMainWindow):
                     app.bundle_id or "",
                     app.version or "",
                     app.price or "",
+                    app.category or "",
                     app.seller_name or "",
                 ),
                 data_index=row_idx,
             )
         _tune_data_table(table, name_col=0, hide_empty_columns=True, wrap=False)
+
+        def apply_category_filter(text: str) -> None:
+            for row in range(table.rowCount()):
+                category_item = table.item(row, 6)
+                category = category_item.text() if category_item else ""
+                table.setRowHidden(
+                    row, text != "Все категории" and category != text
+                )
+            if text != "Все категории":
+                for row in range(table.rowCount()):
+                    if not table.isRowHidden(row):
+                        table.selectRow(row)
+                        break
+                else:
+                    table.clearSelection()
+
+        category_filter.currentTextChanged.connect(apply_category_filter)
         layout.addWidget(table)
 
         card_text = _make_selection_detail(dialog)
@@ -1875,7 +1911,12 @@ class MainWindow(QMainWindow):
 
         def _selected(*, quiet: bool = False) -> AppSearchResult | None:
             data_idx = _selected_data_index(table)
-            if data_idx is None or not (0 <= data_idx < len(results)):
+            if (
+                data_idx is None
+                or not (0 <= data_idx < len(results))
+                or table.currentRow() < 0
+                or table.isRowHidden(table.currentRow())
+            ):
                 if not quiet:
                     QMessageBox.information(
                         dialog, "Выбор", "Выберите приложение в списке."
@@ -1893,7 +1934,9 @@ class MainWindow(QMainWindow):
                 f"Bundle: {app.bundle_id or '—'}\n"
                 f"Источник: {app.source or '—'} · "
                 f"Seller: {app.seller_name or '—'} · "
-                f"Версия: {app.version or '—'}"
+                f"Версия: {app.version or '—'} · "
+                f"Категория: {app.category or 'не указана'} · "
+                f"Цена: {app.price or 'неизвестна'}"
             )
             status_map = {
                 "licensed": "Лицензия: похоже, есть",
