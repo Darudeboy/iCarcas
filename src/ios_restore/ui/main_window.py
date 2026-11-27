@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from ios_restore.application.diagnostics_service import DiagnosticsService
+from ios_restore.application.system_health_service import SystemHealthService
 from ios_restore.application.license_check_service import LicenseCheckService
 from ios_restore.application.regional_search_service import RegionalAppSearchService
 from ios_restore.application.smart_search_service import SmartAppSearchService
@@ -77,6 +78,7 @@ from ios_restore.ui.brand_icon import load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.application.dependency_service import DependencyService
 from ios_restore.ui.dependencies_dialog import show_dependencies_dialog
+from ios_restore.ui.system_doctor_dialog import show_system_doctor
 from ios_restore.ui.onboarding import (
     ensure_onboarding,
     show_help_dialog,
@@ -504,6 +506,17 @@ class MainWindow(QMainWindow):
         r_setup = Row("Подготовка ПК", "Утилиты, драйверы, ipatool")
         r_setup.add_tail(self.open_setup_button)
         help_g.add(r_setup)
+
+        self.doctor_button = AppleButton("Проверить систему", "plain")
+        self.doctor_button.setToolTip(
+            "Проверка компонентов, места на диске, подключения и сессии"
+        )
+        self.doctor_button.clicked.connect(self._on_system_doctor)
+        doctor_row = Row(
+            "System Doctor", "Причины проблем и рекомендации по исправлению"
+        )
+        doctor_row.add_tail(self.doctor_button)
+        help_g.add(doctor_row)
 
         self.release_notes_button = AppleButton("Что нового", "plain")
         self.release_notes_button.clicked.connect(lambda: show_release_notes_dialog(self))
@@ -1612,6 +1625,14 @@ class MainWindow(QMainWindow):
             account_storefront=self._account_storefront,
         )
 
+    def _on_system_doctor(self) -> None:
+        service = SystemHealthService(
+            packages_dir=self._packages_dir,
+            device_adapter=self._device_adapter,
+            session_present=self._appstore.session_files_present(),
+        )
+        show_system_doctor(self, service)
+
     def _on_open_history(self) -> None:
         entries = self._history.list_entries()
         if not entries:
@@ -2716,6 +2737,7 @@ class MainWindow(QMainWindow):
             self.help_button,
             self.release_notes_button,
             self.open_setup_button,
+            self.doctor_button,
             self.replay_onboarding_button,
             self.shortcut_button,
             self.theme_toggle,
