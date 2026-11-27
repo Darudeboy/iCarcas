@@ -613,6 +613,21 @@ class MainWindow(QMainWindow):
         g.add(self.row_device)
         g.add(self.row_trust)
         p.lay.addWidget(g)
+
+        info = Group()
+        self.device_details = Row(
+            "Сведения об устройстве",
+            "Название и версия iOS появятся после обнаружения устройства",
+        )
+        info.add(self.device_details)
+        self.device_guidance = Row(
+            "Как подключить",
+            "1. Подключите USB-кабель. 2. Разблокируйте экран. "
+            "3. Подтвердите доверие. 4. Нажмите «Найти устройство».",
+        )
+        self.device_guidance.sub.setWordWrap(True)
+        info.add(self.device_guidance)
+        p.lay.addWidget(info)
         p.lay.addStretch(1)
         return self._wrap_scroll(p)
 
@@ -2645,6 +2660,10 @@ class MainWindow(QMainWindow):
         assert isinstance(devices, list)
         self._devices = devices
         if not devices:
+            self.device_details.set_sub("Устройство не найдено")
+            self.device_guidance.set_sub(
+                "Проверьте кабель, разблокировку экрана и доверие к компьютеру."
+            )
             self.set_device_chip(False)
             self.output.setPlainText("Устройства не найдены.")
         else:
@@ -2658,6 +2677,15 @@ class MainWindow(QMainWindow):
                     f"iOS={device.os_version or '?'} | {avail}"
                 )
             first = devices[0]
+            self.device_details.set_sub(
+                f"{first.display_name} · iOS {first.os_version or 'неизвестна'}"
+                + (f" · всего устройств: {len(devices)}" if len(devices) > 1 else "")
+            )
+            self.device_guidance.set_sub(
+                "Устройство готово к операциям."
+                if first.available_for_operations
+                else "Подтвердите «Доверять» на устройстве, затем установите доверие."
+            )
             self.set_device_chip(
                 True,
                 first.display_name,
@@ -2669,6 +2697,10 @@ class MainWindow(QMainWindow):
     def _on_paired(self, device: object) -> None:
         assert isinstance(device, DeviceInfo)
         self._devices = [device]
+        self.device_details.set_sub(
+            f"{device.display_name} · iOS {device.os_version or 'неизвестна'}"
+        )
+        self.device_guidance.set_sub("Доверие к компьютеру подтверждено.")
         self.set_device_chip(
             True,
             device.display_name,
