@@ -59,3 +59,26 @@ def test_smart_search_reports_api_outage_without_local_matches() -> None:
     svc._regional.search_region = unavailable  # type: ignore[method-assign]
     with pytest.raises(RestoreError, match="App Store"):
         svc.search("UniqueUnknownApplication887723", "DE")
+
+
+def test_vk_search_pins_original_app_before_related_services() -> None:
+    svc = SmartAppSearchService(catalog=[])
+
+    def vk_services(term: str, region: str) -> list[AppSearchResult]:
+        return [
+            AppSearchResult(
+                store_id="123456789",
+                bundle_id="com.vk.music",
+                display_name="VK Музыка",
+                region=region,
+                source="itunes",
+            ),
+        ]
+
+    svc._regional.search_region = vk_services  # type: ignore[method-assign]
+    for query in ("VK", "vk", "ВК", "ВКонтакте", "вконтакте", "vkontakte"):
+        results = svc.search(query, "RU")
+        assert results[0].store_id == "564177498"
+        assert results[0].display_name == "ВКонтакте"
+        assert results[0].source == "known"
+        assert any(result.store_id == "123456789" for result in results)
