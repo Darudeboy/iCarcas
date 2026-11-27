@@ -746,14 +746,13 @@ class MainWindow(QMainWindow):
         selected_layout.addLayout(selected_text, 1)
         p.lay.addWidget(self.selected_app_card)
 
-        self.app_input = QLineEdit()
+        self.app_input = QLineEdit(p)
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
         )
         self.app_input.setClearButtonEnabled(True)
         # Keep the existing download/version handlers without a duplicate ID field.
         self.app_input.setVisible(False)
-        app_g.add(self.app_input)
 
         self.try_purchase_check = QCheckBox(
             "Попробовать оформить лицензию в текущем регионе"
@@ -766,7 +765,6 @@ class MainWindow(QMainWindow):
         check_lay = QHBoxLayout(check_wrap)
         check_lay.setContentsMargins(16, 8, 16, 8)
         check_lay.addWidget(self.try_purchase_check)
-        app_g.add(check_wrap)
 
         r_dl = Row("Скачать IPA", "Выберите приложение и при необходимости его версию")
         self.download_button = AppleButton("Скачать IPA…", "filled")
@@ -784,7 +782,6 @@ class MainWindow(QMainWindow):
         self.history_button.clicked.connect(self._on_open_history)
         r_pick.add_tail(self.pickup_button)
         r_pick.add_tail(self.history_button)
-        app_g.add(r_pick)
 
         r_ver = Row("История версий", "Версии выбранного приложения")
         self.versions_button = AppleButton("Версии…", "plain")
@@ -796,7 +793,6 @@ class MainWindow(QMainWindow):
         r_ver.add_tail(self.versions_button)
         r_ver.add_tail(self.pickup_versions_button)
         # Общий каталог оставлен в коде для совместимости, но скрыт из основного сценария.
-        app_g.add(r_ver)
         self.advanced_restore_options = QWidget(p)
         advanced_layout = QVBoxLayout(self.advanced_restore_options)
         advanced_layout.setContentsMargins(0, 0, 0, 0)
