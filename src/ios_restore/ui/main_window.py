@@ -718,6 +718,7 @@ class MainWindow(QMainWindow):
         r_find = Row("Шаг 1 · Найти приложение", "Выберите нужное приложение, а не просматривайте весь каталог")
         self.regional_search_button = AppleButton("Найти приложение…", "filled")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
+        self.search_input.returnPressed.connect(self._on_regional_search_app)
         r_find.add_tail(self.regional_search_button)
         search_g.add(r_find)
         p.lay.addWidget(search_g)
