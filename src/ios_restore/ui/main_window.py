@@ -694,28 +694,19 @@ class MainWindow(QMainWindow):
         search_g.add(self.search_input)
 
         self._region_code = "RU"
-        self._region_tags: dict[str, QPushButton] = {}
-        region_wrap = QWidget(p)
-        region_grid = QGridLayout(region_wrap)
-        region_grid.setContentsMargins(12, 8, 12, 8)
-        region_grid.setHorizontalSpacing(6)
-        region_grid.setVerticalSpacing(6)
-        region_cols = 4
-        for index, region in enumerate(RegionalAppSearchService.known_regions()):
-            tag = QPushButton(region.name, region_wrap)
-            tag.setObjectName("regionTag")
-            tag.setCursor(Qt.CursorShape.PointingHandCursor)
-            tag.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            tag.setToolTip(f"Регион App Store: {region.name} ({region.code})")
-            tag.clicked.connect(
-                lambda _checked=False, code=region.code: self._select_region(code)
+        self.region_selector = QComboBox(p)
+        for region in RegionalAppSearchService.known_regions():
+            self.region_selector.addItem(f"{region.name} · {region.code}", region.code)
+        self.region_selector.setToolTip("Регион поиска в App Store")
+        self.region_selector.currentIndexChanged.connect(
+            lambda _index: self._select_region(
+                str(self.region_selector.currentData() or "RU")
             )
-            self._region_tags[region.code] = tag
-            region_grid.addWidget(tag, index // region_cols, index % region_cols)
-        search_g.add(region_wrap)
-        self._select_region("RU")
+        )
+        self.region_selector.setCurrentIndex(0)
+        search_g.add(self.region_selector)
 
-        r_find = Row("Шаг 1 · Найти приложение", "Выберите нужное приложение, а не просматривайте весь каталог")
+        r_find = Row("Найти приложение", "Название, App Store ID или Bundle ID")
         self.regional_search_button = AppleButton("Найти приложение…", "filled")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
         self.search_input.returnPressed.connect(self._on_regional_search_app)
@@ -771,6 +762,8 @@ class MainWindow(QMainWindow):
             "Bundle id (com.example.app) или App Store ID"
         )
         self.app_input.setClearButtonEnabled(True)
+        # Keep the existing download/version handlers without a duplicate ID field.
+        self.app_input.setVisible(False)
         app_g.add(self.app_input)
 
         self.try_purchase_check = QCheckBox(
@@ -786,7 +779,7 @@ class MainWindow(QMainWindow):
         check_lay.addWidget(self.try_purchase_check)
         app_g.add(check_wrap)
 
-        r_dl = Row("Шаг 2 · Скачать IPA", "Проверьте лицензию и выберите нужную версию")
+        r_dl = Row("Скачать IPA", "Выберите приложение и при необходимости его версию")
         self.download_button = AppleButton("Скачать IPA…")
         self.download_button.clicked.connect(self._on_download)
         r_dl.add_tail(self.download_button)
@@ -812,7 +805,28 @@ class MainWindow(QMainWindow):
         r_ver.add_tail(self.pickup_versions_button)
         # Общий каталог оставлен в коде для совместимости, но скрыт из основного сценария.
         app_g.add(r_ver)
+        self.advanced_restore_options = QWidget(p)
+        advanced_layout = QVBoxLayout(self.advanced_restore_options)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.addWidget(check_wrap)
+        advanced_layout.addWidget(r_pick)
+        advanced_layout.addWidget(r_ver)
+        # Advanced actions are accessible but no longer dominate the page.
+        self.advanced_restore_options.setVisible(False)
+        self.advanced_restore_toggle = QPushButton("Дополнительные действия ▾", p)
+        self.advanced_restore_toggle.setCheckable(True)
+        self.advanced_restore_toggle.toggled.connect(
+            self.advanced_restore_options.setVisible
+        )
+        self.advanced_restore_toggle.toggled.connect(
+            lambda expanded: self.advanced_restore_toggle.setText(
+                "Скрыть дополнительные действия ▴"
+                if expanded else "Дополнительные действия ▾"
+            )
+        )
         p.lay.addWidget(app_g)
+        p.lay.addWidget(self.advanced_restore_toggle)
+        p.lay.addWidget(self.advanced_restore_options)
 
         self.download_status_panel = QFrame()
         self.download_status_panel.setObjectName("downloadStatusPanel")
@@ -1941,10 +1955,12 @@ class MainWindow(QMainWindow):
 
     def _select_region(self, code: str) -> None:
         self._region_code = code
-        for tag_code, tag in self._region_tags.items():
-            selected = tag_code == code
-            tag.setProperty("state", "ok" if selected else "idle")
-            repolish(tag)
+        if hasattr(self, "region_selector"):
+            idx = self.region_selector.findData(code)
+            if idx >= 0 and idx != self.region_selector.currentIndex():
+                self.region_selector.blockSignals(True)
+                self.region_selector.setCurrentIndex(idx)
+                self.region_selector.blockSignals(False)
 
     def _on_regional_search_results(self, results: object) -> None:
         assert isinstance(results, list)
