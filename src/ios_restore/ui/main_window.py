@@ -7,8 +7,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QSettings, Qt, QThreadPool, QTimer, QUrl
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1910,6 +1911,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(category_filter)
 
         table = QTableWidget(len(results), 8, dialog)
+        table.setIconSize(QPixmap(40, 40).size())
+        table.verticalHeader().setDefaultSectionSize(52)
         table.setPalette(pal)
         table.setAutoFillBackground(True)
         table.setHorizontalHeaderLabels(
@@ -1956,6 +1959,54 @@ class MainWindow(QMainWindow):
 
         category_filter.currentTextChanged.connect(apply_category_filter)
         layout.addWidget(table)
+
+        artwork_label = QLabel("Иконка загружается…", dialog)
+        artwork_label.setFixedHeight(72)
+        layout.addWidget(artwork_label)
+        artwork_manager = QNetworkAccessManager(dialog)
+        artwork_cache: dict[str, QPixmap] = {}
+        artwork_requested: set[str] = set()
+
+        def request_artwork(app: AppSearchResult) -> None:
+            url = app.artwork_url
+            if not url or not url.startswith("https://"):
+                artwork_label.setText("Иконка недоступна")
+                return
+            if url in artwork_cache:
+                artwork_label.setPixmap(artwork_cache[url])
+                return
+            artwork_label.setText("Иконка загружается…")
+            if url in artwork_requested:
+                return
+            artwork_requested.add(url)
+            reply = artwork_manager.get(QNetworkRequest(QUrl(url)))
+
+            def finished() -> None:
+                try:
+                    if reply.error() != reply.NetworkError.NoError:
+                        return
+                    raw = bytes(reply.readAll())
+                    if len(raw) > 2_000_000:
+                        return
+                    pixmap = QPixmap()
+                    if not pixmap.loadFromData(raw):
+                        return
+                    artwork_cache[url] = pixmap.scaled(
+                        64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    for idx, result in enumerate(results):
+                        if result.artwork_url == url:
+                            item = table.item(idx, 0)
+                            if item is not None:
+                                item.setIcon(QIcon(artwork_cache[url]))
+                    selected = _selected(quiet=True)
+                    if selected is not None and selected.artwork_url == url:
+                        artwork_label.setPixmap(artwork_cache[url])
+                finally:
+                    reply.deleteLater()
+
+            reply.finished.connect(finished)
 
         card_text = _make_selection_detail(dialog)
         card_text.setText("Выберите строку — карточка приложения.")
@@ -2031,6 +2082,7 @@ class MainWindow(QMainWindow):
                 account_storefront=self._account_storefront,
             )
             _apply_card(app, lic)
+            request_artwork(app)
 
         table.itemSelectionChanged.connect(_on_sel)
 
