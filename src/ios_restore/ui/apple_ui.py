@@ -391,7 +391,7 @@ class NavItem(HoverButton):
             p.drawRoundedRect(QRectF(self.rect()), 12, 12)
         tile = QRectF(11, (h - 28) / 2, 28, 28)
         p.setPen(Qt.NoPen)
-        p.setBrush(mix(P[self.color], .22 if not self.isChecked() else .30))
+        p.setBrush(P[self.color])
         p.drawRoundedRect(tile, 9, 9)
         # Glyphs remain legible across both themes.
         p.save()
