@@ -724,6 +724,48 @@ class MainWindow(QMainWindow):
         p.lay.addWidget(search_g)
 
         app_g = Group()
+        # Focused App Store-style card; populated only after choosing an app.
+        self.selected_app_card = QFrame(p)
+        self.selected_app_card.setObjectName("selectedAppCard")
+        self.selected_app_card.setStyleSheet(
+            "QFrame#selectedAppCard { background: palette(base); "
+            "border: 1px solid #D9E5EB; border-radius: 18px; }"
+        )
+        selected_layout = QHBoxLayout(self.selected_app_card)
+        selected_layout.setContentsMargins(20, 18, 20, 18)
+        selected_layout.setSpacing(18)
+        self.selected_app_icon = QLabel(self.selected_app_card)
+        self.selected_app_icon.setFixedSize(76, 76)
+        self.selected_app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selected_app_icon.setStyleSheet(
+            "background: #E8F2F4; border-radius: 16px; color: #52727B;"
+        )
+        self.selected_app_icon.setText("APP")
+        selected_layout.addWidget(self.selected_app_icon)
+        selected_text = QVBoxLayout()
+        self.selected_app_title = QLabel("Выберите приложение")
+        self.selected_app_title.setStyleSheet(
+            "font-size: 19px; font-weight: 700; border: none;"
+        )
+        self.selected_app_title.setWordWrap(True)
+        selected_text.addWidget(self.selected_app_title)
+        self.selected_app_meta = QLabel(
+            "Найдите приложение по названию или идентификатору"
+        )
+        self.selected_app_meta.setWordWrap(True)
+        self.selected_app_meta.setStyleSheet(
+            "color: #638091; border: none;"
+        )
+        selected_text.addWidget(self.selected_app_meta)
+        self.selected_app_license = QLabel("Лицензия ещё не проверена")
+        self.selected_app_license.setWordWrap(True)
+        self.selected_app_license.setStyleSheet(
+            "color: #087D88; font-weight: 600; border: none;"
+        )
+        selected_text.addWidget(self.selected_app_license)
+        selected_layout.addLayout(selected_text, 1)
+        p.lay.addWidget(self.selected_app_card)
+
         self.app_input = QLineEdit()
         self.app_input.setPlaceholderText(
             "Bundle id (com.example.app) или App Store ID"
@@ -1849,6 +1891,37 @@ class MainWindow(QMainWindow):
         elif bundle_id and bundle_id not in {"", "—"}:
             self.app_input.setText(bundle_id)
 
+    def _update_selected_app_card(
+        self,
+        app: AppSearchResult,
+        license_result: LicenseCheckResult,
+        pixmap: QPixmap | None = None,
+    ) -> None:
+        self.selected_app_title.setText(app.display_name or "Приложение")
+        self.selected_app_meta.setText(
+            f"{app.seller_name or 'Разработчик не указан'} · "
+            f"Store ID: {app.store_id or '—'} · "
+            f"Bundle ID: {app.bundle_id or '—'}"
+        )
+        labels = {
+            "licensed": "Найдено в архиве покупок Apple ID",
+            "not_found": "Не найдено в архиве покупок — лицензия не подтверждена",
+            "region_mismatch": "Возможное несовпадение региона Apple ID",
+            "unknown": "Лицензия не проверена: загрузите архив покупок",
+        }
+        self.selected_app_license.setText(
+            labels.get(license_result.status, "Статус лицензии неизвестен")
+        )
+        self.selected_app_icon.clear()
+        if pixmap is not None and not pixmap.isNull():
+            self.selected_app_icon.setPixmap(pixmap.scaled(
+                72, 72,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        else:
+            self.selected_app_icon.setText("APP")
+
     def _on_regional_search_app(self) -> None:
         if self._busy:
             return
@@ -2114,6 +2187,9 @@ class MainWindow(QMainWindow):
                 purchases=self._load_purchases_cache(),
                 account_storefront=self._account_storefront,
             )
+            self._update_selected_app_card(
+                app, lic, artwork_cache.get(app.artwork_url or "")
+            )
             self.output.setPlainText(
                 f"ID из региона {region_code}: {app.display_name or '—'}\n"
                 f"{lic.message}\n"
@@ -2130,6 +2206,14 @@ class MainWindow(QMainWindow):
             self._apply_app_reference(app.store_id, app.bundle_id)
             self._last_display_name = app.display_name
             self.try_purchase_check.setChecked(try_purchase.isChecked())
+            lic = self._license_check.check_search_result(
+                app,
+                purchases=self._load_purchases_cache(),
+                account_storefront=self._account_storefront,
+            )
+            self._update_selected_app_card(
+                app, lic, artwork_cache.get(app.artwork_url or "")
+            )
             self.search_input.clear()
             dialog.accept()
             ref = (
