@@ -20,6 +20,15 @@ class KnownApp:
 
 # Keep titles explicit so they are not confused with taxi / random "Max*" apps.
 KNOWN_APPS: tuple[KnownApp, ...] = (
+    # Main VK social network app. It may be absent from regional iTunes search
+    # even when related VK services are returned. Keep the original Store ID
+    # discoverable without claiming that the IPA is currently downloadable.
+    KnownApp(
+        store_id="564177498",
+        display_name="ВКонтакте",
+        bundle_id=None,
+        queries=("vk", "вк", "вконтакте", "vkontakte"),
+    ),
     KnownApp(
         store_id="6739530834",
         display_name="MAX — мессенджер (VK / ru.oneme.app)",
