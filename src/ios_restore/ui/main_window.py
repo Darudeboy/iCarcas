@@ -806,6 +806,41 @@ class MainWindow(QMainWindow):
         # Advanced actions are accessible but no longer dominate the page.
         self.advanced_restore_options.setVisible(False)
         self.advanced_restore_toggle = QPushButton("Дополнительные действия ▾", p)
+        self.advanced_restore_toggle.setObjectName("advancedRestoreToggle")
+        self.advanced_restore_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.advanced_restore_toggle.setMinimumHeight(48)
+        self.advanced_restore_toggle.setStyleSheet("""
+            QPushButton#advancedRestoreToggle {
+                text-align: left;
+                padding: 11px 18px;
+                background: #FFFFFF;
+                color: #23465A;
+                font-size: 13px;
+                font-weight: 600;
+                border: 1px solid #D9E3EC;
+                border-radius: 14px;
+            }
+            QPushButton#advancedRestoreToggle:hover {
+                background: #F1F7FA;
+                border-color: #B6D2DE;
+            }
+            QPushButton#advancedRestoreToggle:checked {
+                background: #EFF6F9;
+                border-color: #B6D2DE;
+            }
+        """)
+        self.advanced_restore_options.setStyleSheet("""
+            QWidget { background: transparent; }
+            QCheckBox { color: #25465A; padding: 9px 5px; }
+            QPushButton {
+                color: #087F91;
+                background: #FFFFFF;
+                border: 1px solid #D9E3EC;
+                border-radius: 11px;
+                padding: 9px 13px;
+            }
+            QPushButton:hover { background: #EFF7FA; }
+        """)
         self.advanced_restore_toggle.setCheckable(True)
         self.advanced_restore_toggle.toggled.connect(
             self.advanced_restore_options.setVisible
