@@ -479,6 +479,30 @@ class MainWindow(QMainWindow):
             "Начало работы",
             "Свои приложения из App Store на iPhone и iPad",
         )
+        # Live overview: never claim a connection before a device probe.
+        overview = Group()
+        self.home_device = Row("iPhone / iPad", "Устройство ещё не проверялось", lead=Tile("green", "1"))
+        self.home_device.add_tail(self._home_nav_button("Устройства", 1))
+        overview.add(self.home_device)
+        self.home_session = Row("Apple ID", "Проверка сессии ещё не выполнялась", lead=Tile("blue", "2"))
+        self.home_session.add_tail(self._home_nav_button("Аккаунт", 2))
+        overview.add(self.home_session)
+        self.home_package = Row("IPA для установки", "Файл ещё не выбран", lead=Tile("purple", "3"))
+        self.home_package.add_tail(self._home_nav_button("Приложения", 3))
+        overview.add(self.home_package)
+        p.lay.addWidget(overview)
+
+        recent_group = Group()
+        self.home_recent = Row("Последняя операция", "История операций пуста", lead=Tile("gray", "4"))
+        self.home_recent.add_tail(self._home_nav_button("Журнал", 4))
+        recent_group.add(self.home_recent)
+        p.lay.addWidget(recent_group)
+        self._refresh_home_recent()
+
+        section = QLabel("БЫСТРЫЙ СТАРТ", p)
+        section.setObjectName("sectionEyebrow")
+        p.lay.addWidget(section)
+
         g = Group()
         steps = [
             ("A", "Подключите устройство", "USB-кабель, экран разблокирован", 1),
@@ -553,6 +577,25 @@ class MainWindow(QMainWindow):
         p.lay.addWidget(self.privacy_label)
         p.lay.addStretch(1)
         return self._wrap_scroll(p)
+
+    def _home_nav_button(self, text: str, index: int) -> AppleButton:
+        button = AppleButton(text, "plain")
+        button.clicked.connect(lambda _=False, i=index: self.sidebar.select(i))
+        return button
+
+    def _refresh_home_recent(self) -> None:
+        try:
+            entries = self._history.list_entries(limit=1)
+        except OSError:
+            self.home_recent.set_sub("Не удалось прочитать историю")
+            return
+        if not entries:
+            self.home_recent.set_sub("Пока нет скачиваний и установок")
+            return
+        entry = entries[0]
+        action = "Скачано" if entry.kind == "download" else "Установлено"
+        name = entry.display_name or entry.bundle_id or entry.store_id or "Приложение"
+        self.home_recent.set_sub(f"{action}: {name} · {entry.at[:16].replace('T', ' ')} UTC")
 
     def _build_page_device(self) -> QWidget:
         p = Page("Устройство", "Подключение iPhone или iPad к этому компьютеру")
@@ -891,6 +934,10 @@ class MainWindow(QMainWindow):
             self.row_device.dot.set_state("on" if found else "off")
         self.chip_device.set_state(found, label)
         self._refresh_device_actions()
+        self.home_device.set_sub(
+            (f"{label} · " + ("доверие подтверждено" if self._trust_ok else "требуется доверие"))
+            if found else "Устройство не найдено · нажмите «Найти устройство»"
+        )
         if "A" in self.tiles:
             self.tiles["A"].set_done(found and self._trust_ok)
         if found and self._trust_ok:
@@ -912,6 +959,10 @@ class MainWindow(QMainWindow):
         if self.row_session.dot is not None:
             self.row_session.dot.set_state("on" if ok else "off")
         self.chip_session.set_state(ok, label)
+        self.home_session.set_sub(
+            (label + " · наличие сессии не гарантирует действительный вход")
+            if ok else "Сессия не обнаружена · войдите в Apple ID"
+        )
         self._refresh_passphrase_label()
         self._refresh_session_actions()
         if "B" in self.tiles:
@@ -2632,6 +2683,7 @@ class MainWindow(QMainWindow):
 
     def _on_download_done(self, package: PackageInfo) -> None:
         self._package = package
+        self.home_package.set_sub(f"Готов: {Path(package.local_path).name}")
         self.install_button.setEnabled(True)
         self.card_app.set_state("done", "IPA готов")
         if "C" in self.tiles:
