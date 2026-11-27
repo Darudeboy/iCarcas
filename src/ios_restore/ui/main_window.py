@@ -1801,6 +1801,15 @@ class MainWindow(QMainWindow):
 
         table.itemSelectionChanged.connect(_on_sel)
 
+        # Preload artwork for every visible result, not only the selected row.
+        # This keeps icons associated with their own App Store metadata.
+        for app in results:
+            if app.artwork_url and app.artwork_url.startswith("https://"):
+                request_artwork(app)
+        table.clearSelection()
+        artwork_label.clear()
+        artwork_label.setText("Выберите приложение")
+
         def on_use() -> None:
             app = _selected_app()
             if app is None:
@@ -2133,6 +2142,7 @@ class MainWindow(QMainWindow):
         dl_btn.clicked.connect(on_download)
         buttons.rejected.connect(dialog.reject)
         if results:
+            table.setCurrentCell(0, 0)
             table.selectRow(0)
             _on_sel()
         dialog.exec()
