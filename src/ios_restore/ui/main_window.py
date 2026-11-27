@@ -744,6 +744,7 @@ class MainWindow(QMainWindow):
         )
         selected_text.addWidget(self.selected_app_license)
         selected_layout.addLayout(selected_text, 1)
+        p.lay.addWidget(self.selected_app_card)
 
         self.app_input = QLineEdit()
         self.app_input.setPlaceholderText(
@@ -815,6 +816,9 @@ class MainWindow(QMainWindow):
                 if expanded else "Дополнительные действия ▾"
             )
         )
+        p.lay.addWidget(app_g)
+        p.lay.addWidget(self.advanced_restore_toggle)
+        p.lay.addWidget(self.advanced_restore_options)
 
         self.download_status_panel = QFrame()
         self.download_status_panel.setObjectName("downloadStatusPanel")
@@ -844,6 +848,7 @@ class MainWindow(QMainWindow):
         self.download_progress_label.setObjectName("downloadProgressLabel")
         self.download_progress_label.setWordWrap(True)
         dl_status_layout.addWidget(self.download_progress_label)
+        p.lay.addWidget(self.download_status_panel)
 
         ctrl = Group()
         r_ctrl = Row("Управление загрузкой", "")
@@ -855,66 +860,14 @@ class MainWindow(QMainWindow):
         r_ctrl.add_tail(self.cancel_download_button)
         r_ctrl.add_tail(self.diag_button)
         ctrl.add(r_ctrl)
+        p.lay.addWidget(ctrl)
 
         self.install_button = AppleButton(
             "Установить на устройство", "filled", large=True
         )
         self.install_button.setEnabled(False)
         self.install_button.clicked.connect(self._on_install)
-        workspace = QWidget(p)
-        workspace_layout = QHBoxLayout(workspace)
-        workspace_layout.setContentsMargins(0, 0, 0, 0)
-        workspace_layout.setSpacing(18)
-
-        discover = QFrame(workspace)
-        discover.setObjectName("restoreDiscover")
-        discover.setStyleSheet(
-            "QFrame#restoreDiscover { background: rgba(232,241,252,160); "
-            "border: 1px solid #D5E4F1; border-radius: 24px; }"
-        )
-        discover_layout = QVBoxLayout(discover)
-        discover_layout.setContentsMargins(22, 24, 22, 24)
-        discover_layout.setSpacing(14)
-        discover_title = QLabel("Найдите приложение")
-        discover_title.setStyleSheet(
-            "font-size: 21px; font-weight: 700; border: none;"
-        )
-        discover_layout.addWidget(discover_title)
-        discover_hint = QLabel(
-            "Поиск по названию или точному Store ID. "
-            "Выберите нужное приложение из результатов."
-        )
-        discover_hint.setWordWrap(True)
-        discover_hint.setStyleSheet("color: #638091; border: none;")
-        discover_layout.addWidget(discover_hint)
-        self.restore_search_hint = QLabel(
-            "Результаты откроются после поиска. "
-            "У удалённых приложений иконка может быть недоступна."
-        )
-        self.restore_search_hint.setWordWrap(True)
-        self.restore_search_hint.setStyleSheet(
-            "padding: 20px; background: rgba(255,255,255,125); "
-            "border: 1px solid #D9E5F0; border-radius: 16px; "
-            "color: #567388;"
-        )
-        discover_layout.addWidget(self.restore_search_hint)
-        discover_layout.addStretch(1)
-
-        details = QWidget(workspace)
-        details_layout = QVBoxLayout(details)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        details_layout.setSpacing(14)
-        details_layout.addWidget(self.selected_app_card)
-        details_layout.addWidget(app_g)
-        details_layout.addWidget(self.download_status_panel)
-        details_layout.addWidget(self.install_button)
-        details_layout.addWidget(self.advanced_restore_toggle)
-        details_layout.addWidget(self.advanced_restore_options)
-        details_layout.addWidget(ctrl)
-        details_layout.addStretch(1)
-        workspace_layout.addWidget(discover, 5)
-        workspace_layout.addWidget(details, 6)
-        p.lay.addWidget(workspace)
+        p.lay.addWidget(self.install_button)
         p.lay.addStretch(1)
         return self._wrap_scroll(p)
 
@@ -1997,10 +1950,6 @@ class MainWindow(QMainWindow):
         self._selected_restore_app = True
         self.download_button.setEnabled(not self._busy)
         self.download_button.setToolTip("Попробовать скачать выбранное приложение")
-        if hasattr(self, "restore_search_hint"):
-            self.restore_search_hint.setText(
-                f"Выбрано: {app.display_name or app.store_id or 'Приложение'}"
-            )
         self.selected_app_title.setText(app.display_name or "Приложение")
         self.selected_app_meta.setText(
             f"{app.seller_name or 'Разработчик не указан'} · "
