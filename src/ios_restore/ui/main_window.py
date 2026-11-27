@@ -3033,7 +3033,7 @@ class MainWindow(QMainWindow):
             self.archive_button,
             self.pickup_archive_button,
             self.regional_search_button,
-            *self._region_tags.values(),
+            self.region_selector,
             self.diag_button,
             self.help_button,
             self.release_notes_button,
