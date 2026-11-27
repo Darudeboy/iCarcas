@@ -682,12 +682,12 @@ class MainWindow(QMainWindow):
         return self._wrap_scroll(p)
 
     def _build_page_app(self) -> QWidget:
-        p = Page("Приложение", "Поиск, загрузка IPA и установка на устройство")
+        p = Page("Восстановление приложения", "Найдите конкретное приложение, проверьте лицензию и восстановите IPA")
 
         search_g = Group()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(
-            "Название или коротко: МЭШ, Матч, Store ID, bundle…"
+            "Точное название, App Store ID или Bundle ID"
         )
         self.search_input.setClearButtonEnabled(True)
         search_g.add(self.search_input)
@@ -714,8 +714,8 @@ class MainWindow(QMainWindow):
         search_g.add(region_wrap)
         self._select_region("RU")
 
-        r_find = Row("Поиск Store ID", "Скачивание — только при лицензии на аккаунте")
-        self.regional_search_button = AppleButton("Найти ID…", "filled")
+        r_find = Row("Шаг 1 · Найти приложение", "Выберите нужное приложение, а не просматривайте весь каталог")
+        self.regional_search_button = AppleButton("Найти приложение…", "filled")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
         r_find.add_tail(self.regional_search_button)
         search_g.add(r_find)
@@ -742,7 +742,7 @@ class MainWindow(QMainWindow):
         check_lay.addWidget(self.try_purchase_check)
         app_g.add(check_wrap)
 
-        r_dl = Row("Загрузка", "Скачать IPA из вашей библиотеки")
+        r_dl = Row("Шаг 2 · Скачать IPA", "Проверьте лицензию и выберите нужную версию")
         self.download_button = AppleButton("Скачать IPA…")
         self.download_button.clicked.connect(self._on_download)
         r_dl.add_tail(self.download_button)
@@ -757,7 +757,7 @@ class MainWindow(QMainWindow):
         r_pick.add_tail(self.history_button)
         app_g.add(r_pick)
 
-        r_ver = Row("Версии и каталог", "list-versions и локальный список Store ID")
+        r_ver = Row("История версий", "Версии выбранного приложения")
         self.versions_button = AppleButton("Версии…", "plain")
         self.versions_button.clicked.connect(self._on_list_versions)
         self.pickup_versions_button = AppleButton("Подхватить", "plain")
@@ -766,7 +766,7 @@ class MainWindow(QMainWindow):
         self.catalog_button.clicked.connect(self._on_open_catalog)
         r_ver.add_tail(self.versions_button)
         r_ver.add_tail(self.pickup_versions_button)
-        r_ver.add_tail(self.catalog_button)
+        # Общий каталог оставлен в коде для совместимости, но скрыт из основного сценария.
         app_g.add(r_ver)
         p.lay.addWidget(app_g)
 
@@ -1874,8 +1874,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Восстановление начинается с конкретного приложения: не показываем сотни
+        # нерелевантных записей. Сохраняем наиболее релевантные совпадения.
+        results = results[:8]
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Поиск ID ({region_code}) — {len(results)}")
+        dialog.setWindowTitle(f"Выберите приложение ({region_code}) — {len(results)}")
         dialog.resize(1080, 680)
         dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         dialog.setStyleSheet(_dialog_qss(self._mode))
@@ -1884,9 +1887,9 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(dialog)
         hint = QLabel(
-            f"Каталог + iTunes ({region_code}). "
-            "Сверху — наиболее похожие по названию. "
-            "Полное имя выбранного — в карточке ниже."
+            f"Найденные совпадения в регионе {region_code}. "
+            "Выберите конкретное приложение и проверьте лицензию перед скачиванием. "
+            "Отсутствие в архиве покупок не всегда означает отсутствие лицензии."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
