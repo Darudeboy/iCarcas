@@ -996,7 +996,8 @@ class MainWindow(QMainWindow):
                 "Без прохождения знакомства и условий download/install недоступны.\n"
                 "Откройте «Справка» или «Обучение».",
             )
-        self._maybe_prompt_dependencies()
+        # Dependency setup is optional at startup; device diagnostics remain
+        # available on demand via System Doctor / preparation dialog.
         self._refresh_passphrase_label()
         if self._appstore.session_files_present() and kc_pass.has_stored_passphrase():
             worker = AuthInfoWorker(self._appstore)
