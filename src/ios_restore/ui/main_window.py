@@ -2271,40 +2271,50 @@ class MainWindow(QMainWindow):
             return
         try_purchase = self.try_purchase_check.isChecked()
         target = app.display_name or app.bundle_id or app.store_id or "?"
-        version_line = (
-            f"версия (external-version-id): {external_version_id}\n"
-            if external_version_id
-            else "версия: latest\n"
-        )
-        headless = kc_pass.has_stored_passphrase()
-        mode_line = (
-            "Режим: фоновая загрузка с ретраями (сохранённый passphrase).\n"
-            if headless
-            else "Режим: консоль ipatool (введите passphrase вручную).\n"
-        )
         license_result = self._check_license_for_app(
             store_id=app.store_id,
             bundle_id=app.bundle_id,
             app_region=app_region,
         )
-        license_line = f"Лицензия: {license_result.message}\n"
-        msg = (
-            "Начать download IPA?\n"
-            f"{target}\n"
-            f"ID: {app.store_id or app.bundle_id}\n"
-            f"{version_line}"
-            f"{mode_line}"
-            f"{license_line}"
-            f"Каталог: {self._packages_dir}\n"
-            f"--purchase: {'да (текущий storefront)' if try_purchase else 'нет'}\n"
-        )
-        if license_result.status == "not_found" and not try_purchase:
-            msg += "\nВ архиве покупок ID не найден — загрузка, скорее всего, упадёт."
-        if license_result.status == "region_mismatch":
-            msg += "\nРегион витрины не совпадает — высокий риск отказа."
         if confirm:
-            answer = QMessageBox.question(self, "Загрузка", msg)
-            if answer != QMessageBox.StandardButton.Yes:
+            version_text = (
+                f"Историческая версия: {external_version_id}"
+                if external_version_id else "Версия: последняя доступная"
+            )
+            message = version_text
+            if license_result.status == "not_found":
+                message += (
+                    "\n\nПриложение не найдено в архиве покупок Apple ID. "
+                    "Это не доказывает отсутствие лицензии, но скачивание "
+                    "может завершиться ошибкой."
+                )
+            elif license_result.status == "region_mismatch":
+                message += (
+                    "\n\nРегион приложения отличается от региона Apple ID. "
+                    "Скачивание может быть недоступно."
+                )
+            elif license_result.status == "unknown":
+                message += (
+                    "\n\nЛицензия пока не подтверждена. "
+                    "Возможность скачивания выяснится при попытке."
+                )
+            if try_purchase:
+                message += (
+                    "\n\nВключена попытка оформления лицензии "
+                    "в текущем регионе Apple ID."
+                )
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Question)
+            dialog.setWindowTitle("Скачивание приложения")
+            dialog.setText(f"Скачать {target}?")
+            dialog.setInformativeText(message)
+            download_choice = dialog.addButton(
+                "Попробовать скачать",
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton() is not download_choice:
                 return
         if app.display_name:
             self._last_display_name = app.display_name
