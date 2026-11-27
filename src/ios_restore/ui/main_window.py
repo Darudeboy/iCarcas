@@ -2734,6 +2734,7 @@ class MainWindow(QMainWindow):
             display_name=display,
             version=package.version,
         )
+        self._refresh_home_recent()
         self._set_download_progress_ui(
             phase="ok",
             percent=100,
@@ -2770,6 +2771,7 @@ class MainWindow(QMainWindow):
                 display_name=app_name,
                 version=pkg.version,
             )
+            self._refresh_home_recent()
         self._set_busy(False)
         if "D" in self.tiles:
             self.tiles["D"].set_done(True)
