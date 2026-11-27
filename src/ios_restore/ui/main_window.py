@@ -2005,10 +2005,15 @@ class MainWindow(QMainWindow):
                         64, 64, Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
-                    for idx, result in enumerate(results):
-                        if result.artwork_url == url:
-                            item = table.item(idx, 0)
-                            if item is not None:
+                    # Sorting can move rows: resolve the original result index
+                    # from the row's stored user data instead of using idx.
+                    for row in range(table.rowCount()):
+                        item = table.item(row, 0)
+                        if item is None:
+                            continue
+                        data_idx = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(data_idx, int) and 0 <= data_idx < len(results):
+                            if results[data_idx].artwork_url == url:
                                 item.setIcon(QIcon(artwork_cache[url]))
                     selected = _selected(quiet=True)
                     if selected is not None and selected.artwork_url == url:
