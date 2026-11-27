@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime
@@ -1857,6 +1858,50 @@ class MainWindow(QMainWindow):
 
         table.itemSelectionChanged.connect(_on_sel)
 
+        # Catalog/known entries may not contain artwork. Resolve it only by
+        # exact Store ID; never use fuzzy name-based image matching.
+        lookup_manager = QNetworkAccessManager(dialog)
+        for app in results:
+            if app.artwork_url or not app.store_id or not app.store_id.isdigit():
+                continue
+            lookup_url = QUrl(
+                f"https://itunes.apple.com/lookup?id={app.store_id}&country={region_code}"
+            )
+            lookup_reply = lookup_manager.get(QNetworkRequest(lookup_url))
+
+            def lookup_finished(reply=lookup_reply, expected_id=app.store_id) -> None:
+                try:
+                    if reply.error() != reply.NetworkError.NoError:
+                        return
+                    payload = bytes(reply.readAll())
+                    if len(payload) > 500_000:
+                        return
+                    data = json.loads(payload.decode("utf-8"))
+                    entries = data.get("results", [])
+                    match = next(
+                        (item for item in entries
+                         if isinstance(item, dict)
+                         and str(item.get("trackId", "")) == expected_id),
+                        None,
+                    )
+                    if match is None:
+                        return
+                    url = match.get("artworkUrl512") or match.get("artworkUrl100")
+                    if not isinstance(url, str) or not url.startswith("https://"):
+                        return
+                    # The result model is immutable. Register the URL against
+                    # the exact matching result rows for the artwork callback.
+                    for idx, result in enumerate(results):
+                        if result.store_id == expected_id:
+                            catalog_artwork_urls[idx] = url
+                    request_artwork_url(url)
+                except (ValueError, TypeError, UnicodeError):
+                    return
+                finally:
+                    reply.deleteLater()
+
+            lookup_reply.finished.connect(lookup_finished)
+
         # Preload artwork for every visible result, not only the selected row.
         # This keeps icons associated with their own App Store metadata.
         for app in results:
@@ -2065,11 +2110,10 @@ class MainWindow(QMainWindow):
         artwork_manager = QNetworkAccessManager(dialog)
         artwork_cache: dict[str, QPixmap] = {}
         artwork_requested: set[str] = set()
+        catalog_artwork_urls: dict[int, str] = {}
 
-        def request_artwork(app: AppSearchResult) -> None:
-            url = app.artwork_url
-            if not url or not url.startswith("https://"):
-                artwork_label.setText("Иконка недоступна")
+        def request_artwork_url(url: str) -> None:
+            if not url.startswith("https://"):
                 return
             if url in artwork_cache:
                 artwork_label.setPixmap(artwork_cache[url])
@@ -2102,15 +2146,26 @@ class MainWindow(QMainWindow):
                             continue
                         data_idx = item.data(Qt.ItemDataRole.UserRole)
                         if isinstance(data_idx, int) and 0 <= data_idx < len(results):
-                            if results[data_idx].artwork_url == url:
+                            if (results[data_idx].artwork_url == url
+                                    or catalog_artwork_urls.get(data_idx) == url):
                                 item.setIcon(QIcon(artwork_cache[url]))
-                    selected = _selected(quiet=True)
-                    if selected is not None and selected.artwork_url == url:
+                    selected_idx = _selected_data_index(table)
+                    if isinstance(selected_idx, int) and (
+                        results[selected_idx].artwork_url == url
+                        or catalog_artwork_urls.get(selected_idx) == url
+                    ):
                         artwork_label.setPixmap(artwork_cache[url])
                 finally:
                     reply.deleteLater()
 
             reply.finished.connect(finished)
+
+        def request_artwork(app: AppSearchResult) -> None:
+            url = app.artwork_url
+            if not url:
+                artwork_label.setText("Иконка недоступна")
+                return
+            request_artwork_url(url)
 
         card_text = _make_selection_detail(dialog)
         card_text.setText("Выберите строку — карточка приложения.")
@@ -2186,7 +2241,12 @@ class MainWindow(QMainWindow):
                 account_storefront=self._account_storefront,
             )
             _apply_card(app, lic)
-            request_artwork(app)
+            idx = _selected_data_index(table)
+            fallback_url = catalog_artwork_urls.get(idx) if isinstance(idx, int) else None
+            if fallback_url:
+                request_artwork_url(fallback_url)
+            else:
+                request_artwork(app)
 
         table.itemSelectionChanged.connect(_on_sel)
 
