@@ -6,6 +6,7 @@ from ios_restore.application.regional_search_service import (
     RegionalAppSearchService,
     iTunesRegionalSearchAdapter,
 )
+from ios_restore.domain.errors import ErrorCode, RestoreError
 from ios_restore.domain.known_apps import KnownApp, resolve_known_apps
 from ios_restore.domain.models import AppSearchResult, CatalogApp
 from ios_restore.domain.search_query import (
@@ -126,10 +127,12 @@ class SmartAppSearchService:
         short_brand = len(compact_text(cleaned)) <= 4
         min_itunes_score = 140 if short_brand else 60
 
+        search_failures = 0
         for iterm in itunes_terms:
             try:
                 itunes_hits = self._regional.search_region(iterm, region_code)
             except Exception:  # noqa: BLE001
+                search_failures += 1
                 itunes_hits = []
 
             for app in itunes_hits:
@@ -162,6 +165,12 @@ class SmartAppSearchService:
                 if score < min_itunes_score:
                     continue
                 add(app, score)
+
+        if itunes_terms and search_failures == len(itunes_terms) and not merged:
+            raise RestoreError(
+                ErrorCode.REGIONAL_SEARCH_FAILED,
+                "Не удалось связаться с App Store. Проверьте сеть и повторите поиск.",
+            )
 
         ordered = sorted(
             merged.values(),
