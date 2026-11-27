@@ -86,6 +86,7 @@ QFrame#group {
 QLabel { background: transparent; }
 QLabel#large { font-size: 31px; font-weight: 700; }
 QLabel#brand { font-size: 24px; font-weight: 700; }
+QLabel#sectionEyebrow { color: $sub; font-size: 11px; font-weight: 700; }
 QLabel#sub, QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { color: $sub; }
 QLabel#footnote, QLabel#rowSub, QLabel#privacyNotice { font-size: 12px; }
 QLabel#themeLabel { color: $text; font-size: 13px; font-weight: 600; }
