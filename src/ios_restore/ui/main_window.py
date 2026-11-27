@@ -2862,38 +2862,45 @@ class MainWindow(QMainWindow):
         device = self._devices[0]
         pkg = self._package
         meets = device_meets_minimum(device.os_version, pkg.minimum_os_version)
-        min_line = f"min iOS IPA: {pkg.minimum_os_version or 'неизвестно'}\n"
         if meets is False:
-            answer = QMessageBox.warning(
-                self,
-                "iOS слишком старая",
-                "Устройство, похоже, не тянет минимальную iOS этого IPA.\n\n"
-                f"Устройство: iOS {device.os_version or '?'}\n"
-                f"IPA требует: {pkg.minimum_os_version}\n\n"
-                "Всё равно попытаться установить?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+            warning = QMessageBox(self)
+            warning.setIcon(QMessageBox.Icon.Warning)
+            warning.setWindowTitle("Проверка совместимости")
+            warning.setText("Версия приложения может быть несовместима с iPad")
+            warning.setInformativeText(
+                f"На устройстве: iPadOS {device.os_version or 'неизвестно'}\n"
+                f"Приложению требуется: iOS {pkg.minimum_os_version or 'неизвестно'}\n\n"
+                "Установка может завершиться ошибкой."
             )
-            if answer != QMessageBox.StandardButton.Yes:
+            proceed = warning.addButton(
+                "Всё равно попробовать", QMessageBox.ButtonRole.AcceptRole
+            )
+            warning.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+            warning.exec()
+            if warning.clickedButton() is not proceed:
                 return
-        elif meets is True:
-            min_line += f"Проверка min iOS: OK (устройство {device.os_version})\n"
-        else:
-            min_line += "Проверка min iOS: не удалось сравнить версии\n"
-        answer = QMessageBox.question(
-            self,
-            "Подтверждение установки",
-            "Установить пакет на устройство?\n\n"
-            f"Устройство: {device.display_name} ({device.device_id})\n"
-            f"iOS: {device.os_version or '?'}\n"
-            f"{min_line}"
-            f"Пакет: {pkg.local_path}\n"
-            f"Размер: {pkg.size_bytes} байт\n"
-            f"bundle_id: {pkg.bundle_id or 'неизвестно'}\n"
-            f"version: {pkg.version or 'неизвестно'}\n\n"
-            "Операция может изменить существующую установку.",
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setWindowTitle("Установка приложения")
+        dialog.setText(f"Установить {pkg.bundle_id or pkg.local_path.stem}?")
+        compatibility = (
+            "Совместимость с iPadOS подтверждена"
+            if meets is True else "Совместимость не удалось проверить"
+            if meets is None else "Возможна несовместимость с iPadOS"
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        dialog.setInformativeText(
+            f"Устройство: {device.display_name}\n"
+            f"Версия приложения: {pkg.version or 'неизвестна'}\n"
+            f"{compatibility}\n\n"
+            "Если приложение уже установлено, его текущая версия может быть заменена."
+        )
+        install_choice = dialog.addButton(
+            "Установить", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is not install_choice:
             return
         self._set_busy(True, "Установка через ideviceinstaller…")
         worker = InstallAppWorker(self._installer, pkg, device)
