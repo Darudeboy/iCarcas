@@ -77,6 +77,7 @@ from ios_restore.ui.apple_ui import (
     Tile,
     Toggle,
 )
+from ios_restore.ui.liquid_search import LiquidSearchBar
 from ios_restore.ui.brand_icon import load_app_icon
 from ios_restore.ui.history_dialog import show_history_dialog, show_install_success_dialog
 from ios_restore.application.dependency_service import DependencyService
@@ -686,34 +687,21 @@ class MainWindow(QMainWindow):
     def _build_page_app(self) -> QWidget:
         p = Page("Восстановление приложения", "Найдите конкретное приложение, проверьте лицензию и восстановите IPA")
 
-        search_g = Group()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText(
-            "Точное название, App Store ID или Bundle ID"
-        )
-        self.search_input.setClearButtonEnabled(True)
-        search_g.add(self.search_input)
-
+        search_bar = LiquidSearchBar(p)
+        self.search_input = search_bar.search_input
+        self.region_selector = search_bar.region_selector
+        self.regional_search_button = search_bar.search_button
         self._region_code = "RU"
-        self.region_selector = QComboBox(p)
         for region in RegionalAppSearchService.known_regions():
             self.region_selector.addItem(f"{region.name} · {region.code}", region.code)
-        self.region_selector.setToolTip("Регион поиска в App Store")
         self.region_selector.currentIndexChanged.connect(
             lambda _index: self._select_region(
                 str(self.region_selector.currentData() or "RU")
             )
         )
-        self.region_selector.setCurrentIndex(0)
-        search_g.add(self.region_selector)
-
-        r_find = Row("Найти приложение", "Название, App Store ID или Bundle ID")
-        self.regional_search_button = AppleButton("Найти приложение…", "filled")
         self.regional_search_button.clicked.connect(self._on_regional_search_app)
         self.search_input.returnPressed.connect(self._on_regional_search_app)
-        r_find.add_tail(self.regional_search_button)
-        search_g.add(r_find)
-        p.lay.addWidget(search_g)
+        p.lay.addWidget(search_bar)
 
         app_g = Group()
         # Focused App Store-style card; populated only after choosing an app.
